@@ -196,6 +196,8 @@ Wants=network-online.target
 
 [Service]
 Environment=TAILCAT_ADDR_FILE=${TOKEN_FILE}
+# SSH host keys 存放在 XDG config dir; sandbox 下 HOME 只读, 指到可写目录
+Environment=XDG_CONFIG_HOME=/var/lib/tailcat/cfg
 ExecStart=$(command -v tailcat) --serve=no-auth-ssh --allow=${ALLOWED_CLIENT} --key=default
 Restart=always
 RestartSec=3
@@ -204,7 +206,7 @@ User=${SSH_USER}
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$(dirname "$TOKEN_FILE")
+ReadWritePaths=/var/lib/tailcat
 
 [Install]
 WantedBy=multi-user.target
@@ -215,6 +217,8 @@ systemctl enable --now "$SERVICE_NAME"
 sleep 1
 systemctl is-active --quiet "$SERVICE_NAME" \
     || { journalctl -u "$SERVICE_NAME" -n 20 --no-pager; die "服务启动失败"; }
+sudo -u "${SSH_USER}" mkdir -p /var/lib/tailcat/cfg 2>/dev/null || mkdir -p /var/lib/tailcat/cfg
+chown -R "${SSH_USER}:" /var/lib/tailcat/cfg 2>/dev/null || true
 
 # 5. 输出
 log "════════════════════════════════════════════════════════"
