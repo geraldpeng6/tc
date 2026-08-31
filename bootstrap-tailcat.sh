@@ -8,20 +8,25 @@
 # 动作:
 #   1. 安装 tailcat v0.3.0 (.deb, 自动识别 amd64/arm64/armv7)
 #   2. 生成持久密钥 (--fixed-region, 令牌永久有效, 重启不变)
-#   3. 安装 systemd 服务: --serve=22 (走真 sshd, 双层认证)
-#      + --allow 白名单 (只允许指定客户端公钥握手)
+#   3. 安装 systemd 服务: --serve=no-auth-ssh + --allow 白名单
+#      (无需 SSH 密钥/密码, 新机器零 SSH 配置)
 #   4. 令牌写入 /var/lib/tailcat/token 并打印出来
 #
-# 安全模型(三层):
-#   令牌公开无害(只是门牌号) → WireGuard 白名单(--allow) → 系统 sshd 公钥认证
+# 安全模型(两层):
+#   令牌公开无害(只是门牌号) → WireGuard 白名单(--allow, 需对应私钥才能握手)
 #
-#用法:
+# 用法:
 #   bash bootstrap-tailcat.sh [选项]
 # 选项:
-#   --user NAME    SSH 登录的服务提示 (默认: 当前用户, 仅用于展示)
-#   --port N       代理到本地 sshd 的端口 (默认 22)
+#   --user NAME    用哪个系统用户跑服务 (默认: 当前用户)
+#   --port N       兼容参数, 现已忽略(no-auth-ssh 模式)
 #   --derp HOST    使用自建 DERP 中继 (可选, 默认用官方 tailcat.dev 免费中继)
 #   --uninstall    卸载服务并删除密钥
+#
+# 安全模型:
+#   认证完全依赖 --allow 白名单(需持有对应私钥才能握手),
+#   无需配置 SSH 密钥/密码, 新机器零 SSH 配置
+#   令牌(token)只是地址, 公开无风险
 # ============================================================================
 
 set -euo pipefail
@@ -181,8 +186,8 @@ else
     chmod 644 "$TOKEN_FILE"
 fi
 
-# 4. systemd 服务
-log "写入 systemd 服务 (${SERVICE_NAME}, 代理到本机 sshd :${SSH_PORT})..."
+# 4. systemd 服务 (no-auth-ssh: 认证全靠 --allow 白名单, 无需 SSH 密钥)
+log "写入 systemd 服务 (${SERVICE_NAME}, 白名单: ${ALLOWED_CLIENT:0:16}...)..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=tailcat ssh (via ${SSH_USER})
@@ -191,7 +196,7 @@ Wants=network-online.target
 
 [Service]
 Environment=TAILCAT_ADDR_FILE=${TOKEN_FILE}
-ExecStart=$(command -v tailcat) --serve=${SSH_PORT} --allow=${ALLOWED_CLIENT} --key=default
+ExecStart=$(command -v tailcat) --serve=no-auth-ssh --allow=${ALLOWED_CLIENT} --key=default
 Restart=always
 RestartSec=3
 # 安全加固: 不给 root 权限, 不读系统敏感目录, 令牌文件单独可读
@@ -218,16 +223,14 @@ echo   ""
 echo   "  本机令牌 (永不过期, 重启不变):"
 echo   "      $TOKEN"
 echo   ""
-echo   "  在 Mac 上连接:"
+echo   "  从 Mac 连接 (无需任何密码/密钥, 白名单已限定):"
 echo   "      tailcat ssh ${SSH_USER}@$TOKEN"
 echo   "      tailcat ssh ${SSH_USER}@$TOKEN 'uptime'   # 跑单命令"
 echo   "      tailcat cp file.txt ${SSH_USER}@$TOKEN:   # 传文件"
 echo   ""
-echo   "  可选: 写入 DNS TXT 后用域名连 (令牌=下面这串):"
-echo   "      <host>.example.com. IN TXT \"tailcat=$TOKEN\""
-echo   "      tailcat ssh ${SSH_USER}@<host>.example.com"
+echo   "  令牌即地址: 已保存在本机 $TOKEN_FILE"
+echo   "  任何持白名单私钥的设备随时可连, 无需回传登记"
 echo   ""
 echo   "  查看状态: systemctl status ${SERVICE_NAME}"
 echo   "  令牌文件: $TOKEN_FILE"
-echo   "  白名单:   $ALLOWED_CLIENT"
 log "════════════════════════════════════════════════════════"
