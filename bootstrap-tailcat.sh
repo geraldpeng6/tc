@@ -128,8 +128,9 @@ validate_derp_hosts() {
     IFS=',' read -r -a hosts <<<"$value"
     ((${#hosts[@]} > 0)) || die "--derp requires at least one hostname"
     for host in "${hosts[@]}"; do
-        ((${#host} <= 253)) && [[ "$host" =~ $hostname_re ]] \
-            || die "invalid DERP hostname: $host"
+        if ((${#host} > 253)) || [[ ! "$host" =~ $hostname_re ]]; then
+            die "invalid DERP hostname: $host"
+        fi
     done
 }
 
@@ -184,8 +185,8 @@ acquire_lock() {
 }
 
 select_package() {
-    local architecture="${1:-$(dpkg --print-architecture)}"
-    local machine="${2:-$(uname -m)}"
+    local architecture="$1"
+    local machine="$2"
 
     case "$architecture" in
         amd64)
@@ -523,7 +524,7 @@ main() {
 
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
-    select_package
+    select_package "$(dpkg --print-architecture)" "$(uname -m)"
     install_tailcat
     ensure_support_user
     configure_allowed_clients

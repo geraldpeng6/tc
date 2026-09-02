@@ -2,7 +2,7 @@
 
 在 Debian/Ubuntu 系硬件上安装一个按需开启的 Tailcat 售后支持入口。它不开放公网入站端口，不需要 Tailscale 账号，也不会提供常驻 root shell。
 
-Installer SHA256: `a3a3cdbc7d12b0d0d62ff6f2eecd4ef423cd9f7d492aec01187a95efe1139ba7`
+Installer SHA256: `eb1e229e6564c8c6741be9e89270df31c5a382fc3b8648d1e880f40d39f6e489`
 
 ## 安全模型
 
@@ -41,7 +41,7 @@ tailcat genkey --client --key=device-SERIAL
 发布签名 tag `bootstrap-v1.0.0` 后，将 `nodekey:...` 和自建 DERP 域名替换为该设备的值。整条命令应通过产品说明书、签名发布页或其他独立可信渠道交付：
 
 ```bash
-( f=$(mktemp) && curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.0.0/bootstrap-tailcat.sh -o "$f" && printf '%s  %s\n' 'a3a3cdbc7d12b0d0d62ff6f2eecd4ef423cd9f7d492aec01187a95efe1139ba7' "$f" | sha256sum --check --status - && sudo bash "$f" --allow='nodekey:DEVICE_SPECIFIC_PUBLIC_KEY' --derp='derp.example.com'; rc=$?; [ -z "${f:-}" ] || rm -f "$f"; exit "$rc" )
+( f=$(mktemp) && curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.0.0/bootstrap-tailcat.sh -o "$f" && printf '%s  %s\n' 'eb1e229e6564c8c6741be9e89270df31c5a382fc3b8648d1e880f40d39f6e489' "$f" | sha256sum --check --status - && sudo bash "$f" --allow='nodekey:DEVICE_SPECIFIC_PUBLIC_KEY' --derp='derp.example.com'; rc=$?; [ -z "${f:-}" ] || rm -f "$f"; exit "$rc" )
 ```
 
 公开 Tailcat DERP 仅适合测试或无 SLA 场景，必须显式选择：
