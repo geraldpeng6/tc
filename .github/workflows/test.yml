@@ -26,7 +26,7 @@ jobs:
         run: |
           echo "ROTATED_KEY=nodekey:$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Install and open a support window
-        run: sudo ./bootstrap-tailcat.sh --duration-minutes=5
+        run: cat bootstrap-tailcat.sh | sudo bash -s -- --duration-minutes=5
       - name: Verify service and state
         run: |
           test "$(systemctl show tailcat-ssh --property=User --value)" = "$(id -un)"

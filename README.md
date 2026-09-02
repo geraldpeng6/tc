@@ -2,12 +2,12 @@
 
 在 Debian/Ubuntu 系硬件上安装一个按需开启的 Tailcat 售后入口。不开放公网入站端口，不需要 Tailscale 账号。
 
-Installer SHA256: `16e89d8f0a27b934a19a3595a26362d48dbfd872f278ef7d149864d85ecfc419`
+Installer SHA256: `9f783c1a5f81c668702c3c437e94e55a5907079df581078461bd0ea3facb00a7`
 
 ## 一行安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.0/bootstrap-tailcat.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/bootstrap-tailcat.sh | sudo bash
 ```
 
 安装器默认使用内置的售后客户端公钥和 `derp1d.tailscale.com`，并打印设备的 `tc...` token。
@@ -52,7 +52,7 @@ sudo journalctl -u tailcat-ssh
 每次 `start` 都重新开启同样时长的窗口。安装时可设置 5 至 1440 分钟：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.0/bootstrap-tailcat.sh | sudo bash -s -- --duration-minutes=120
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/bootstrap-tailcat.sh | sudo bash -s -- --duration-minutes=120
 ```
 
 ## 覆盖默认配置
@@ -73,7 +73,7 @@ sudo bash bootstrap-tailcat.sh --allow='nodekey:...' --public-derp
 - 从 `bootstrap-v1.0.0` 升级时会删除旧安装器创建的 `tailcat-support` 系统用户，改用本次执行 `sudo` 的登录用户。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.0/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
 ```
 
 卸载会删除服务、设备私钥和 token，但不会删除或修改原登录用户。Tailcat 软件包会保留，必要时运行 `sudo dpkg --remove tailcat`。

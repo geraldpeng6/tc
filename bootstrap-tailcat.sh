@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-readonly INSTALLER_VERSION="1.1.0"
+readonly INSTALLER_VERSION="1.1.1"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly TAILCAT_BIN="/usr/bin/tailcat"
@@ -58,7 +58,7 @@ die()  { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'EOF'
 Usage:
-  curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.0/bootstrap-tailcat.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/bootstrap-tailcat.sh | sudo bash
   sudo bash bootstrap-tailcat.sh --allow KEY[,KEY...] --derp HOST[,HOST...]
   sudo bash bootstrap-tailcat.sh --allow KEY[,KEY...] --public-derp
   sudo bash bootstrap-tailcat.sh --uninstall
@@ -545,6 +545,6 @@ main() {
     printf 'Connection log: sudo journalctl -u %s\n' "$SERVICE_NAME"
 }
 
-if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
     main "$@"
 fi
