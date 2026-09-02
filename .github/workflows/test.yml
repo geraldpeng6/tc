@@ -1,0 +1,60 @@
+name: test
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check shell
+        run: |
+          bash -n bootstrap-tailcat.sh tests/bootstrap-tailcat-test.sh
+          shellcheck -x bootstrap-tailcat.sh tests/bootstrap-tailcat-test.sh
+          tests/bootstrap-tailcat-test.sh
+
+  install:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Create unreachable test identities
+        run: |
+          echo "CLIENT_KEY=nodekey:$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ROTATED_KEY=nodekey:$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Install and open a support window
+        run: sudo ./bootstrap-tailcat.sh --allow="$CLIENT_KEY" --derp=derp1d.tailscale.com --duration-minutes=5
+      - name: Verify service and state
+        run: |
+          test "$(systemctl show tailcat-ssh --property=User --value)" = tailcat-support
+          test "$(systemctl show tailcat-ssh --property=Group --value)" = tailcat-support
+          test "$(systemctl is-enabled tailcat-ssh 2>/dev/null || true)" != enabled
+          sudo systemctl is-active --quiet tailcat-ssh
+          sudo systemd-analyze verify /etc/systemd/system/tailcat-ssh.service
+          test "$(systemctl show tailcat-ssh --property=Restart --value)" = no
+          test "$(systemctl show tailcat-ssh --property=RuntimeMaxUSec --value)" != infinity
+          test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/server.private.json)" = root:tailcat-support:640
+          test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/token)" = root:root:600
+          test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/home)" = root:tailcat-support:750
+          test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/work)" = tailcat-support:tailcat-support:700
+          sudo /usr/bin/tailcat parse "$(sudo cat /var/lib/tailcat/token)" >/dev/null
+      - name: Rotate client access without changing device identity
+        run: |
+          before="$(sudo cat /var/lib/tailcat/token)"
+          sudo ./bootstrap-tailcat.sh --allow="$ROTATED_KEY" --derp=derp1d.tailscale.com --duration-minutes=5
+          after="$(sudo cat /var/lib/tailcat/token)"
+          test "$before" = "$after"
+          sudo grep --fixed-strings -- "--allow=$ROTATED_KEY" /etc/systemd/system/tailcat-ssh.service
+          sudo systemctl is-active --quiet tailcat-ssh
+      - name: Uninstall
+        if: always()
+        run: |
+          sudo ./bootstrap-tailcat.sh --uninstall
+          test ! -e /etc/systemd/system/tailcat-ssh.service
+          test ! -e /var/lib/tailcat
+          if getent passwd tailcat-support; then exit 1; fi
+          if getent group tailcat-support; then exit 1; fi
