@@ -60,6 +60,10 @@ expect_failure parse_args --allow "$VALID_KEY" --derp derp.example.com --public-
 expect_failure parse_args --duration-minutes 4
 expect_failure parse_args --duration-minutes 1441
 expect_failure parse_args --uninstall --public-derp
+(parse_args)
+
+assert_equal "$DEFAULT_ALLOWED_CLIENTS" "nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
+assert_equal "$DEFAULT_DERP_HOSTS" "derp1d.tailscale.com"
 
 requested="$(requested_relay)"
 assert_equal "$requested" ""

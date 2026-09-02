@@ -3,15 +3,17 @@
 set -Eeuo pipefail
 umask 077
 
-readonly INSTALLER_VERSION="1.0.0"
+readonly INSTALLER_VERSION="1.1.0"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly TAILCAT_BIN="/usr/bin/tailcat"
+readonly DEFAULT_ALLOWED_CLIENTS="nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
+readonly DEFAULT_DERP_HOSTS="derp1d.tailscale.com"
 
-readonly SUPPORT_USER="tailcat-support"
-readonly SUPPORT_GROUP="tailcat-support"
+readonly LEGACY_SUPPORT_USER="tailcat-support"
+readonly LEGACY_SUPPORT_GROUP="tailcat-support"
 readonly STATE_DIR="/var/lib/tailcat"
-readonly SUPPORT_HOME="${STATE_DIR}/home"
+readonly LEGACY_SUPPORT_HOME="${STATE_DIR}/home"
 readonly WORK_DIR="${STATE_DIR}/work"
 readonly KEY_FILE="${STATE_DIR}/server.private.json"
 readonly TOKEN_FILE="${STATE_DIR}/token"
@@ -36,6 +38,10 @@ ALLOWED_CLIENTS=""
 DERP_HOSTS=""
 USE_PUBLIC_DERP=0
 DURATION_MINUTES=60
+SERVICE_USER=""
+SERVICE_GROUP=""
+SERVICE_HOME=""
+SERVICE_SHELL=""
 TMP_DIR=""
 ASSET_NAME=""
 PACKAGE_ARCH=""
@@ -52,22 +58,23 @@ die()  { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'EOF'
 Usage:
+  curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.0/bootstrap-tailcat.sh | sudo bash
   sudo bash bootstrap-tailcat.sh --allow KEY[,KEY...] --derp HOST[,HOST...]
   sudo bash bootstrap-tailcat.sh --allow KEY[,KEY...] --public-derp
   sudo bash bootstrap-tailcat.sh --uninstall
 
 Options:
-  --allow KEYS       Allowed tailcat client public keys. Required on first install.
+  --allow KEYS       Allowed tailcat client public keys. A bundled key is used by default.
                      Re-run with a new list to revoke or rotate support clients.
-  --derp HOSTS       Self-hosted DERP hostname(s), comma-separated. Recommended.
+  --derp HOSTS       DERP hostname(s), comma-separated. A bundled host is used by default.
   --public-derp      Explicitly use Tailcat's best-effort public relay service.
   --duration-minutes N
                      Support window duration, 5-1440 minutes (default: 60).
-  --uninstall        Remove the service, device identity, token, and managed user.
+  --uninstall        Remove the service, device identity, and token.
   -h, --help         Show this help.
 
-The service runs as the unprivileged tailcat-support user, is never enabled at
-boot, and stops automatically when the support window expires.
+The service runs as the user who invoked sudo and inherits that user's existing
+sudo policy. It is never enabled at boot and stops when the window expires.
 EOF
 }
 
@@ -162,7 +169,7 @@ preflight() {
     need_root
     [[ "$(uname -s)" == "Linux" ]] || die "only Linux is supported"
     [[ -d /run/systemd/system ]] || die "systemd is not running"
-    for command_name in flock getent groupdel systemctl userdel; do
+    for command_name in flock getent groupdel id systemctl userdel; do
         need_command "$command_name"
     done
     [[ "$MODE" == "install" ]] || return 0
@@ -174,7 +181,7 @@ preflight() {
     os_id_like=" ${ID_LIKE:-} "
     [[ "$os_id" == "debian" || "$os_id" == "ubuntu" || "$os_id_like" == *" debian "* ]] \
         || die "only Debian/Ubuntu-family systems are supported"
-    for command_name in cmp curl dpkg dpkg-deb dpkg-query install mktemp sha256sum useradd; do
+    for command_name in cmp curl dpkg dpkg-deb dpkg-query install mktemp sha256sum; do
         need_command "$command_name"
     done
 }
@@ -271,36 +278,40 @@ install_tailcat() {
         || die "installed binary version does not match v${TAILCAT_VERSION}"
 }
 
-ensure_support_user() {
-    local passwd_entry uid home primary_group groups forbidden_group
-
-    install -d -o root -g root -m 0755 "$STATE_DIR"
-    if ! getent passwd "$SUPPORT_USER" >/dev/null; then
-        if getent group "$SUPPORT_GROUP" >/dev/null; then
-            die "refusing to reuse pre-existing group: $SUPPORT_GROUP"
-        fi
-        useradd --system --user-group --create-home \
-            --home-dir "$SUPPORT_HOME" --shell /bin/sh "$SUPPORT_USER"
-        : >"$MANAGED_USER_FILE"
-        chmod 0600 "$MANAGED_USER_FILE"
-    elif [[ ! -e "$MANAGED_USER_FILE" ]]; then
-        die "refusing to reuse pre-existing account: $SUPPORT_USER"
+remove_legacy_support_user() {
+    [[ -e "$MANAGED_USER_FILE" ]] || return 0
+    if getent passwd "$LEGACY_SUPPORT_USER" >/dev/null; then
+        userdel "$LEGACY_SUPPORT_USER" || die "could not remove $LEGACY_SUPPORT_USER"
     fi
+    if getent group "$LEGACY_SUPPORT_GROUP" >/dev/null; then
+        groupdel "$LEGACY_SUPPORT_GROUP" || die "could not remove $LEGACY_SUPPORT_GROUP"
+    fi
+    rm -f -- "$MANAGED_USER_FILE"
+    rmdir "$LEGACY_SUPPORT_HOME" >/dev/null 2>&1 || true
+}
 
-    passwd_entry="$(getent passwd "$SUPPORT_USER")"
-    IFS=: read -r _ _ uid _ _ home _ <<<"$passwd_entry"
-    primary_group="$(id -gn "$SUPPORT_USER")"
-    groups=" $(id -nG "$SUPPORT_USER") "
-    [[ "$uid" != "0" ]] || die "$SUPPORT_USER must not have UID 0"
-    [[ "$home" == "$SUPPORT_HOME" ]] || die "$SUPPORT_USER has unexpected home: $home"
-    [[ "$primary_group" == "$SUPPORT_GROUP" ]] || die "$SUPPORT_USER has unexpected primary group: $primary_group"
-    for forbidden_group in root sudo wheel docker lxd disk shadow; do
-        [[ "$groups" != *" $forbidden_group "* ]] \
-            || die "$SUPPORT_USER must not belong to $forbidden_group"
-    done
+select_service_user() {
+    local passwd_entry uid
 
-    install -d -o root -g "$SUPPORT_GROUP" -m 0750 "$SUPPORT_HOME"
-    install -d -o "$SUPPORT_USER" -g "$SUPPORT_GROUP" -m 0700 "$WORK_DIR"
+    SERVICE_USER="${SUDO_USER:-}"
+    [[ -n "$SERVICE_USER" && "$SERVICE_USER" != "root" ]] \
+        || die "run this installer from the intended login user with sudo, not from a root shell"
+    [[ "$SERVICE_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] \
+        || die "unsupported login user name: $SERVICE_USER"
+    passwd_entry="$(getent passwd "$SERVICE_USER")" \
+        || die "login user does not exist: $SERVICE_USER"
+    IFS=: read -r _ _ uid _ _ SERVICE_HOME SERVICE_SHELL <<<"$passwd_entry"
+    [[ "$uid" =~ ^[0-9]+$ && "$uid" != "0" ]] \
+        || die "service user must not have UID 0"
+    [[ -d "$SERVICE_HOME" ]] || die "login user home does not exist: $SERVICE_HOME"
+    [[ "$SERVICE_HOME" == /* && "$SERVICE_HOME" != *['"'\\%]* ]] \
+        || die "login user home cannot be written safely to a systemd unit"
+    [[ "$SERVICE_SHELL" == /* && -x "$SERVICE_SHELL" && "$SERVICE_SHELL" != *['"'\\%]* ]] \
+        || die "login user has an unusable shell: $SERVICE_SHELL"
+    SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+    [[ "$SERVICE_GROUP" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] \
+        || die "unsupported primary group name: $SERVICE_GROUP"
+
 }
 
 configure_allowed_clients() {
@@ -313,7 +324,11 @@ configure_allowed_clients() {
         ALLOWED_CLIENTS="$(<"$ALLOW_FILE")"
         validate_allowed_clients "$ALLOWED_CLIENTS"
     else
-        die "first install requires --allow with a device-specific client public key"
+        ALLOWED_CLIENTS="$DEFAULT_ALLOWED_CLIENTS"
+        printf '%s\n' "$ALLOWED_CLIENTS" >"$ALLOW_FILE"
+        chown root:root "$ALLOW_FILE"
+        chmod 0600 "$ALLOW_FILE"
+        log "using bundled support client key"
     fi
 }
 
@@ -334,17 +349,22 @@ requested_relay() {
 load_saved_relay() {
     local saved
 
-    [[ -z "$DERP_HOSTS" && "$USE_PUBLIC_DERP" -eq 0 && -s "$RELAY_FILE" ]] || return 0
-    saved="$(<"$RELAY_FILE")"
-    case "$saved" in
-        custom:*)
-            DERP_HOSTS="${saved#custom:}"
-            validate_derp_hosts "$DERP_HOSTS"
-            ;;
-        public) USE_PUBLIC_DERP=1 ;;
-        legacy) ;;
-        *) die "invalid saved relay metadata" ;;
-    esac
+    [[ -z "$DERP_HOSTS" && "$USE_PUBLIC_DERP" -eq 0 ]] || return 0
+    if [[ -s "$RELAY_FILE" ]]; then
+        saved="$(<"$RELAY_FILE")"
+        case "$saved" in
+            custom:*)
+                DERP_HOSTS="${saved#custom:}"
+                validate_derp_hosts "$DERP_HOSTS"
+                ;;
+            public) USE_PUBLIC_DERP=1 ;;
+            legacy) ;;
+            *) die "invalid saved relay metadata" ;;
+        esac
+    elif [[ ! -e "$KEY_FILE" && ! -e "$TOKEN_FILE" && ! -e "$LEGACY_KEY_FILE" ]]; then
+        DERP_HOSTS="$DEFAULT_DERP_HOSTS"
+        log "using bundled DERP host: $DERP_HOSTS"
+    fi
 }
 
 prepare_identity() {
@@ -358,7 +378,7 @@ prepare_identity() {
         printf 'legacy\n' >"$RELAY_FILE"
         chown root:root "$RELAY_FILE"
         chmod 0600 "$RELAY_FILE"
-        install -o root -g "$SUPPORT_GROUP" -m 0640 "$LEGACY_KEY_FILE" "$KEY_FILE"
+        install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 "$LEGACY_KEY_FILE" "$KEY_FILE"
         MIGRATED_LEGACY_KEY=1
     fi
     [[ ! -e "$KEY_FILE" || -s "$KEY_FILE" ]] || die "server key is empty"
@@ -395,11 +415,11 @@ prepare_identity() {
         printf '%s\n' "$requested" >"$RELAY_FILE"
         chown root:root "$RELAY_FILE"
         chmod 0600 "$RELAY_FILE"
-        install -o root -g "$SUPPORT_GROUP" -m 0640 "$tmp_key" "$KEY_FILE"
+        install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 "$tmp_key" "$KEY_FILE"
     fi
 
-    chown "root:$SUPPORT_GROUP" "$KEY_FILE"
-    chmod 0640 "$KEY_FILE"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$KEY_FILE"
+    chmod 0600 "$KEY_FILE"
 }
 
 write_service() {
@@ -411,10 +431,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${SUPPORT_USER}
-Group=${SUPPORT_GROUP}
-WorkingDirectory=${SUPPORT_HOME}
-Environment=HOME=${SUPPORT_HOME}
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+WorkingDirectory=${SERVICE_HOME}
+Environment="HOME=${SERVICE_HOME}"
+Environment="SHELL=${SERVICE_SHELL}"
 Environment=XDG_CONFIG_HOME=/run/tailcat-support/config
 Environment=XDG_CACHE_HOME=/run/tailcat-support/cache
 Environment=TAILCAT_ADDR_FILE=${RUNTIME_TOKEN}
@@ -423,24 +444,8 @@ Restart=no
 RuntimeMaxSec=${DURATION_MINUTES}min
 RuntimeDirectory=tailcat-support
 RuntimeDirectoryMode=0700
-UMask=0077
 
-NoNewPrivileges=yes
-CapabilityBoundingSet=
-LockPersonality=yes
-PrivateTmp=yes
-ProtectControlGroups=yes
-ProtectHome=yes
-ProtectKernelModules=yes
-ProtectKernelTunables=yes
-ProtectSystem=strict
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=${WORK_DIR}
-
-# PrivateDevices is intentionally omitted. Grant hardware access only through
-# explicit Unix device groups for this unprivileged account.
+# The remote shell intentionally inherits this user's normal sudo policy.
 EOF
     chmod 0644 "$SERVICE_FILE"
 }
@@ -491,21 +496,13 @@ start_support_window() {
 }
 
 uninstall_service() {
-    local remove_user=0
-
-    [[ -e "$MANAGED_USER_FILE" ]] && remove_user=1
     systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
     rm -f -- "$SERVICE_FILE" "$LEGACY_KEY_FILE"
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
-    if [[ "$remove_user" -eq 1 ]] && getent passwd "$SUPPORT_USER" >/dev/null; then
-        userdel "$SUPPORT_USER" || die "could not remove $SUPPORT_USER"
-    fi
-    if [[ "$remove_user" -eq 1 ]] && getent group "$SUPPORT_GROUP" >/dev/null; then
-        groupdel "$SUPPORT_GROUP" || die "could not remove $SUPPORT_GROUP"
-    fi
+    remove_legacy_support_user
     rm -rf -- "$STATE_DIR"
-    log "removed the service, device identity, token, and managed support user"
+    log "removed the service, device identity, and token; the login user was not changed"
     log "the tailcat package remains installed; remove it with: dpkg --remove tailcat"
 }
 
@@ -519,23 +516,27 @@ main() {
         return
     fi
 
+    select_package "$(dpkg --print-architecture)" "$(uname -m)"
+    select_service_user
     TMP_DIR="$(mktemp -d -t tailcat-bootstrap.XXXXXXXX)"
     trap cleanup EXIT
 
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
-    select_package "$(dpkg --print-architecture)" "$(uname -m)"
     install_tailcat
-    ensure_support_user
+    install -d -o root -g root -m 0755 "$STATE_DIR"
+    install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$WORK_DIR"
     configure_allowed_clients
     load_saved_relay
     [[ -z "$DERP_HOSTS" ]] || probe_derp_hosts
     prepare_identity
     write_service
     start_support_window
+    remove_legacy_support_user
     INSTALL_COMPLETE=1
 
     log "tailcat bootstrap ${INSTALLER_VERSION} installed tailcat v${TAILCAT_VERSION}"
+    log "remote session user: ${SERVICE_USER}; existing sudo policy is unchanged"
     log "support window: active for ${DURATION_MINUTES} minutes; disabled at boot"
     printf '\nDevice token:\n%s\n\n' "$TOKEN"
     printf 'Verify remotely: tailcat --key=<device-key> ping %s\n' "$TOKEN"
