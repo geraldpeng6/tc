@@ -213,10 +213,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-# 若服务已在运行但 ExecStart 定义与本次写入的不一致, 强制重启以应用新版
+# 若服务已在运行但定义是旧版(无修复), 强制重启以应用新版
 if systemctl is-active --quiet "$SERVICE_NAME"; then
-    OLD_CMD="$(systemctl show "$SERVICE_NAME" -p ExecStart --value 2>/dev/null)"
-    NEW_CMD="/usr/bin/tailcat --serve=no-auth-ssh --allow=${ALLOWED_CLIENT} --key=default (..."
     if ! systemctl cat "$SERVICE_NAME" 2>/dev/null | grep -q "XDG_CONFIG_HOME=/var/lib/tailcat/cfg"; then
         log "检测到旧版服务定义, 强制重启以应用修复..."
         systemctl restart "$SERVICE_NAME"
