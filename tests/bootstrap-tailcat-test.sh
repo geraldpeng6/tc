@@ -59,7 +59,15 @@ expect_failure select_package i386 i686
 expect_failure parse_args --allow "$VALID_KEY" --derp derp.example.com --public-derp
 expect_failure parse_args --duration-minutes 4
 expect_failure parse_args --duration-minutes 1441
+expect_failure parse_args --duration-minutes 0
+duration_test_dir="$(mktemp -d)"
+duration_marker="${duration_test_dir}/marker"
+cleanup_duration_test() { rm -rf -- "$duration_test_dir"; }
+trap cleanup_duration_test EXIT
+expect_failure parse_args --duration-minutes="HOME[\$(touch \"$duration_marker\")]"
+[[ ! -e "$duration_marker" ]] || fail "duration validation executed command substitution"
 expect_failure parse_args --uninstall --public-derp
+expect_failure parse_args --uninstall --duration-minutes=0
 (parse_args)
 
 assert_equal "$DEFAULT_ALLOWED_CLIENTS" "nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"

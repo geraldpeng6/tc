@@ -4,12 +4,12 @@
 
 **默认为常驻模式**：服务开机自启、崩溃自动重启、令牌永不过期，机器重启后无需任何人到场即可远程接入。需要临时性窗口时使用 `--duration-minutes`。
 
-Installer SHA256: `a0526959c551c22ab35c60afe6ebf52a3c875a0e89fa3f42617b349305355c36`
+Installer SHA256: `c30b79663d1572f8397330f5e6b94bd7271fcd91a3875504bec10b06cb5d9181`
 
 ## 一行安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.2/bootstrap-tailcat.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.3/bootstrap-tailcat.sh | sudo bash
 ```
 
 安装器默认使用内置的售后客户端公钥和 `derp1d.tailscale.com`，并打印设备的 `tc...` token。
@@ -86,7 +86,7 @@ sudo bash bootstrap-tailcat.sh --allow='nodekey:...' --public-derp
 - 从 `bootstrap-v1.0.0` 升级时会删除旧安装器创建的 `tailcat-support` 系统用户，改用本次执行 `sudo` 的登录用户。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.2/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.3/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
 ```
 
 卸载会删除服务、设备私钥和 token，但不会删除或修改原登录用户。Tailcat 软件包会保留，必要时运行 `sudo dpkg --remove tailcat`。

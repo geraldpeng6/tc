@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-readonly INSTALLER_VERSION="1.1.2"
+readonly INSTALLER_VERSION="1.1.3"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly TAILCAT_BIN="/usr/bin/tailcat"
@@ -38,6 +38,7 @@ ALLOWED_CLIENTS=""
 DERP_HOSTS=""
 USE_PUBLIC_DERP=0
 DURATION_MINUTES=0
+DURATION_SET=0
 SERVICE_USER=""
 SERVICE_GROUP=""
 SERVICE_HOME=""
@@ -49,6 +50,12 @@ EXPECTED_SHA256=""
 TOKEN=""
 MIGRATED_LEGACY_KEY=0
 SERVICE_STARTED=0
+SERVICE_SNAPSHOT_READY=0
+SERVICE_UPDATE_STARTED=0
+SERVICE_FILE_EXISTED=0
+SERVICE_WAS_ACTIVE=0
+SERVICE_WAS_ENABLED=0
+SERVICE_BACKUP_FILE=""
 INSTALL_COMPLETE=0
 
 log()  { printf '[bootstrap] %s\n' "$*"; }
@@ -100,10 +107,10 @@ parse_args() {
                 DERP_HOSTS="$2"; shift 2
                 ;;
             --public-derp) USE_PUBLIC_DERP=1; shift ;;
-            --duration-minutes=*) DURATION_MINUTES="${1#*=}"; shift ;;
+            --duration-minutes=*) DURATION_MINUTES="${1#*=}"; DURATION_SET=1; shift ;;
             --duration-minutes)
                 (($# >= 2)) || die "--duration-minutes requires a value"
-                DURATION_MINUTES="$2"; shift 2
+                DURATION_MINUTES="$2"; DURATION_SET=1; shift 2
                 ;;
             --uninstall) MODE="uninstall"; shift ;;
             -h|--help) usage; exit 0 ;;
@@ -112,16 +119,18 @@ parse_args() {
     done
 
     if [[ "$MODE" == "uninstall" ]]; then
-        [[ -z "$ALLOWED_CLIENTS" && -z "$DERP_HOSTS" && "$USE_PUBLIC_DERP" -eq 0 && "$DURATION_MINUTES" -eq 0 ]] \
+        [[ -z "$ALLOWED_CLIENTS" && -z "$DERP_HOSTS" && "$USE_PUBLIC_DERP" -eq 0 && "$DURATION_SET" -eq 0 ]] \
             || die "--uninstall cannot be combined with install options"
         return 0
     fi
 
-    [[ "$DURATION_MINUTES" -eq 0 ]] || {
+    if ((DURATION_SET)); then
         [[ "$DURATION_MINUTES" =~ ^[0-9]+$ ]] || die "duration must be an integer"
-        ((DURATION_MINUTES >= 5 && DURATION_MINUTES <= 1440)) \
+        ((${#DURATION_MINUTES} <= 4)) || die "duration must be between 5 and 1440 minutes"
+        ((10#$DURATION_MINUTES >= 5 && 10#$DURATION_MINUTES <= 1440)) \
             || die "duration must be between 5 and 1440 minutes"
-    }
+        DURATION_MINUTES=$((10#$DURATION_MINUTES))
+    fi
     [[ -z "$DERP_HOSTS" || "$USE_PUBLIC_DERP" -eq 0 ]] \
         || die "use either --derp or --public-derp, not both"
     [[ -z "$ALLOWED_CLIENTS" ]] || validate_allowed_clients "$ALLOWED_CLIENTS"
@@ -191,7 +200,7 @@ preflight() {
     os_id_like=" ${ID_LIKE:-} "
     [[ "$os_id" == "debian" || "$os_id" == "ubuntu" || "$os_id_like" == *" debian "* ]] \
         || die "only Debian/Ubuntu-family systems are supported"
-    for command_name in cmp curl dpkg dpkg-deb dpkg-query install mktemp sha256sum; do
+    for command_name in cmp cp curl dpkg dpkg-deb dpkg-query install mktemp sha256sum; do
         need_command "$command_name"
     done
 }
@@ -229,11 +238,53 @@ select_package() {
 }
 
 cleanup() {
-    if [[ "$SERVICE_STARTED" -eq 1 && "$INSTALL_COMPLETE" -eq 0 ]]; then
-        systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if [[ "$INSTALL_COMPLETE" -eq 0 ]]; then
+        if [[ "$SERVICE_UPDATE_STARTED" -eq 1 ]]; then
+            restore_previous_service
+        elif [[ "$SERVICE_STARTED" -eq 1 ]]; then
+            systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
     fi
     if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
         rm -rf -- "$TMP_DIR"
+    fi
+}
+
+snapshot_service() {
+    SERVICE_BACKUP_FILE="${TMP_DIR}/${SERVICE_NAME}.service.backup"
+    if [[ -e "$SERVICE_FILE" ]]; then
+        cp -p -- "$SERVICE_FILE" "$SERVICE_BACKUP_FILE" \
+            || die "could not back up the existing service unit"
+        SERVICE_FILE_EXISTED=1
+    fi
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        SERVICE_WAS_ACTIVE=1
+    fi
+    if systemctl is-enabled --quiet "$SERVICE_NAME"; then
+        SERVICE_WAS_ENABLED=1
+    fi
+    SERVICE_SNAPSHOT_READY=1
+}
+
+restore_previous_service() {
+    [[ "$SERVICE_SNAPSHOT_READY" -eq 1 ]] || return 0
+
+    systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if [[ "$SERVICE_FILE_EXISTED" -eq 1 ]]; then
+        cp -p -- "$SERVICE_BACKUP_FILE" "$SERVICE_FILE" \
+            || { warn "could not restore the previous service unit"; return 0; }
+    else
+        rm -f -- "$SERVICE_FILE" || true
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [[ "$SERVICE_WAS_ENABLED" -eq 1 ]]; then
+        systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+    else
+        systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+    if [[ "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
+        systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || \
+            warn "could not restart the previous service"
     fi
 }
 
@@ -433,6 +484,7 @@ prepare_identity() {
 }
 
 write_service() {
+    SERVICE_UPDATE_STARTED=1
     cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=On-demand Tailcat hardware support
@@ -559,8 +611,6 @@ main() {
     TMP_DIR="$(mktemp -d -t tailcat-bootstrap.XXXXXXXX)"
     trap cleanup EXIT
 
-    systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
-    systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
     install_tailcat
     install -d -o root -g root -m 0755 "$STATE_DIR"
     install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$WORK_DIR"
@@ -568,6 +618,7 @@ main() {
     load_saved_relay
     [[ -z "$DERP_HOSTS" ]] || probe_derp_hosts
     prepare_identity
+    snapshot_service
     write_service
     start_support_window
     remove_legacy_support_user
