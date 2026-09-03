@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-readonly INSTALLER_VERSION="1.1.1"
+readonly INSTALLER_VERSION="1.1.2"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly TAILCAT_BIN="/usr/bin/tailcat"
