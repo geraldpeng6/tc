@@ -37,7 +37,7 @@ MODE="install"
 ALLOWED_CLIENTS=""
 DERP_HOSTS=""
 USE_PUBLIC_DERP=0
-DURATION_MINUTES=60
+DURATION_MINUTES=0
 SERVICE_USER=""
 SERVICE_GROUP=""
 SERVICE_HOME=""
@@ -57,11 +57,17 @@ die()  { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-Usage:
-  curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/bootstrap-tailcat.sh | sudo bash
-  sudo bash bootstrap-tailcat.sh --allow KEY[,KEY...] --derp HOST[,HOST...]
-  sudo bash bootstrap-tailcat.sh --allow KEY[,KEY...] --public-derp
-  sudo bash bootstrap-tailcat.sh --uninstall
+Usage: sudo bash bootstrap-tailcat.sh [--allow KEY[,KEY...]] [--derp HOST[,HOST...]]
+       sudo bash bootstrap-tailcat.sh --duration-minutes N
+       sudo bash bootstrap-tailcat.sh --uninstall
+
+Mode: install (default) | --uninstall
+
+Install modes:
+  Default (recommended): persistent service. Enabled at boot, always
+  running, and survives machine restarts with a stable token.
+  --duration-minutes N: instead run a temporary support window that
+  auto-stops after N minutes (5-1440) and stays disabled at boot.
 
 Options:
   --allow KEYS       Allowed tailcat client public keys. A bundled key is used by default.
@@ -69,12 +75,14 @@ Options:
   --derp HOSTS       DERP hostname(s), comma-separated. A bundled host is used by default.
   --public-derp      Explicitly use Tailcat's best-effort public relay service.
   --duration-minutes N
-                     Support window duration, 5-1440 minutes (default: 60).
+                     Temporary support window in minutes, 5-1440.
+                     Omit for a persistent service (default).
   --uninstall        Remove the service, device identity, and token.
   -h, --help         Show this help.
 
-The service runs as the user who invoked sudo and inherits that user's existing
-sudo policy. It is never enabled at boot and stops when the window expires.
+In the default persistent mode the service runs as the user who invoked
+sudo, inherits that user's existing sudo policy, and restarts
+automatically after failures or reboots.
 EOF
 }
 
@@ -104,14 +112,16 @@ parse_args() {
     done
 
     if [[ "$MODE" == "uninstall" ]]; then
-        [[ -z "$ALLOWED_CLIENTS" && -z "$DERP_HOSTS" && "$USE_PUBLIC_DERP" -eq 0 && "$DURATION_MINUTES" == "60" ]] \
+        [[ -z "$ALLOWED_CLIENTS" && -z "$DERP_HOSTS" && "$USE_PUBLIC_DERP" -eq 0 && "$DURATION_MINUTES" -eq 0 ]] \
             || die "--uninstall cannot be combined with install options"
         return 0
     fi
 
-    [[ "$DURATION_MINUTES" =~ ^[0-9]+$ ]] || die "duration must be an integer"
-    ((DURATION_MINUTES >= 5 && DURATION_MINUTES <= 1440)) \
-        || die "duration must be between 5 and 1440 minutes"
+    [[ "$DURATION_MINUTES" -eq 0 ]] || {
+        [[ "$DURATION_MINUTES" =~ ^[0-9]+$ ]] || die "duration must be an integer"
+        ((DURATION_MINUTES >= 5 && DURATION_MINUTES <= 1440)) \
+            || die "duration must be between 5 and 1440 minutes"
+    }
     [[ -z "$DERP_HOSTS" || "$USE_PUBLIC_DERP" -eq 0 ]] \
         || die "use either --derp or --public-derp, not both"
     [[ -z "$ALLOWED_CLIENTS" ]] || validate_allowed_clients "$ALLOWED_CLIENTS"
@@ -440,8 +450,21 @@ Environment=XDG_CONFIG_HOME=/run/tailcat-support/config
 Environment=XDG_CACHE_HOME=/run/tailcat-support/cache
 Environment=TAILCAT_ADDR_FILE=${RUNTIME_TOKEN}
 ExecStart=${TAILCAT_BIN} serve --key=${KEY_FILE} --verbose --allow=${ALLOWED_CLIENTS} no-auth-ssh
+EOF
+    if [[ "$DURATION_MINUTES" -gt 0 ]]; then
+        # Temporary support window: no auto-restart, no boot enable.
+        cat >>"$SERVICE_FILE" <<EOF
 Restart=no
 RuntimeMaxSec=${DURATION_MINUTES}min
+EOF
+    else
+        # Persistent mode: stay up, recover from failures, run at boot.
+        cat >>"$SERVICE_FILE" <<'EOF'
+Restart=on-failure
+RestartSec=3
+EOF
+    fi
+    cat >>"$SERVICE_FILE" <<'EOF'
 RuntimeDirectory=tailcat-support
 RuntimeDirectoryMode=0700
 
@@ -477,6 +500,12 @@ start_support_window() {
     systemctl is-active --quiet "$SERVICE_NAME" || service_failure "service exited after publishing its token"
     validate_token "$active_token"
 
+    if [[ "$DURATION_MINUTES" -eq 0 ]]; then
+        # Persistent mode: enable at boot so the token survives reboots.
+        systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 \
+            || service_failure "could not enable service at boot"
+    fi
+
     if [[ -n "$TOKEN" && "$TOKEN" != "$active_token" ]]; then
         systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
         die "persisted token does not match the server private key; refusing silent identity replacement"
@@ -489,7 +518,8 @@ start_support_window() {
     if [[ "$MIGRATED_LEGACY_KEY" -eq 1 ]]; then
         rm -f -- "$LEGACY_KEY_FILE"
     fi
-    if [[ "$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)" == "enabled" ]]; then
+    if [[ "$DURATION_MINUTES" -gt 0 ]] \
+        && [[ "$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)" == "enabled" ]]; then
         systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
         die "service must not be enabled at boot"
     fi
@@ -537,7 +567,11 @@ main() {
 
     log "tailcat bootstrap ${INSTALLER_VERSION} installed tailcat v${TAILCAT_VERSION}"
     log "remote session user: ${SERVICE_USER}; existing sudo policy is unchanged"
-    log "support window: active for ${DURATION_MINUTES} minutes; disabled at boot"
+    if [[ "$DURATION_MINUTES" -gt 0 ]]; then
+        log "support window: active for ${DURATION_MINUTES} minutes; disabled at boot"
+    else
+        log "persistent service: enabled at boot, restarts on failure"
+    fi
     printf '\nDevice token:\n%s\n\n' "$TOKEN"
     printf 'Verify remotely: tailcat --key=<device-key> ping %s\n' "$TOKEN"
     printf 'Stop now:       sudo systemctl stop %s\n' "$SERVICE_NAME"

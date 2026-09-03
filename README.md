@@ -1,8 +1,10 @@
 # tailcat-bootstrap
 
-在 Debian/Ubuntu 系硬件上安装一个按需开启的 Tailcat 售后入口。不开放公网入站端口，不需要 Tailscale 账号。
+在 Debian/Ubuntu 系硬件上安装一个 Tailcat 远程入口。不开放公网入站端口，不需要 Tailscale 账号。
 
-Installer SHA256: `9f783c1a5f81c668702c3c437e94e55a5907079df581078461bd0ea3facb00a7`
+**默认为常驻模式**：服务开机自启、崩溃自动重启、令牌永不过期，机器重启后无需任何人到场即可远程接入。需要临时性窗口时使用 `--duration-minutes`。
+
+Installer SHA256: `e3d72d63b8f222e002bb8f4d8dd460ca81c7553823aae435146f243be36b87fd`
 
 ## 一行安装
 
@@ -12,12 +14,12 @@ curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/boo
 
 安装器默认使用内置的售后客户端公钥和 `derp1d.tailscale.com`，并打印设备的 `tc...` token。
 
-## 权限和时限
+## 权限模型
 
+- 默认安装**常驻服务**：`Restart=on-failure` + 开机自启，令牌永久有效。
 - Tailcat 服务使用执行 `sudo` 的现有登录用户，不会创建 `tailcat-support` 用户。
 - 远程终端拥有该用户本来的文件、设备组和 sudo 权限。该用户原本能 sudo 时，可在远程终端输入该用户自己的密码运行 `sudo`；安装器不会保存密码或修改 sudoers。
-- 服务安装后立即运行 60 分钟，到期断开；不随开机启动。
-- 允许 sudo 意味着取得售后私钥和 sudo 密码的人可以完全控制设备。获得 root 后也能绕过 60 分钟限制，因此售后私钥和设备密码不能公开或共用泄漏。
+- 允许 sudo 意味着取得售后私钥和 sudo 密码的人可以完全控制设备。售后私钥和设备密码不能公开或共用泄漏。
 - `journalctl` 记录连接方 node key 和网络事件，但不记录完整 shell 命令。
 
 `derp1d.tailscale.com` 是测试用公共 DERP，没有商业可用性承诺。正式售后应改为自建 DERP。
@@ -41,18 +43,29 @@ sudo <维修命令>
 
 `sudo` 验证的是 `whoami` 显示用户的密码，不是一个通用的 root 密码。
 
-## 窗口控制
+## 常驻 vs 临时窗口
+
+默认（无参数）安装常驻服务：
 
 ```bash
-sudo systemctl stop tailcat-ssh
-sudo systemctl start tailcat-ssh
-sudo journalctl -u tailcat-ssh
+sudo bash bootstrap-tailcat.sh          # 常驻: 开机自启 + 自动重启
 ```
 
-每次 `start` 都重新开启同样时长的窗口。安装时可设置 5 至 1440 分钟：
+需要限时窗口（如给外部支持人员临时开门）时加 `--duration-minutes`，5 至 1440 分钟：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.1/bootstrap-tailcat.sh | sudo bash -s -- --duration-minutes=120
+sudo bash bootstrap-tailcat.sh --duration-minutes=120
+```
+
+限时模式下服务不随开机启动，到期自动断开；每次 `systemctl start` 都重新开启同样时长的窗口。两种模式下设备身份（token）都保持不变。
+
+## 状态与控制
+
+```bash
+systemctl status tailcat-ssh        # 查看状态
+sudo systemctl stop tailcat-ssh     # 立即关闭入口
+sudo systemctl start tailcat-ssh    # 重新打开
+sudo journalctl -u tailcat-ssh      # 连接日志
 ```
 
 ## 覆盖默认配置

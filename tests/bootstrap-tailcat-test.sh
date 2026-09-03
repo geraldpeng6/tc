@@ -66,7 +66,7 @@ assert_equal "$DEFAULT_ALLOWED_CLIENTS" "nodekey:6381fe8fa9c2b67c7d25ded51bde5e3
 assert_equal "$DEFAULT_DERP_HOSTS" "derp1d.tailscale.com"
 
 help_output="$(bash -s -- --help <"$ROOT/bootstrap-tailcat.sh")"
-[[ "$help_output" == *"Usage:"* ]] || fail "stdin execution did not call main"
+[[ "$help_output" == *"Usage: sudo bash bootstrap-tailcat.sh"* ]] || fail "stdin execution did not call main"
 
 requested="$(requested_relay)"
 assert_equal "$requested" ""
