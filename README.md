@@ -4,7 +4,7 @@
 
 **默认为常驻模式**：服务开机自启、崩溃自动重启、令牌永不过期，机器重启后无需任何人到场即可远程接入。需要临时性窗口时使用 `--duration-minutes`。
 
-Installer SHA256: `e3d72d63b8f222e002bb8f4d8dd460ca81c7553823aae435146f243be36b87fd`
+Installer SHA256: `411c62c7e414b239fbc435dabd231a1b21068b962211cb27adcb54ff9e91aa6d`
 
 ## 一行安装
 

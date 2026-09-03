@@ -470,6 +470,14 @@ RuntimeDirectoryMode=0700
 
 # The remote shell intentionally inherits this user's normal sudo policy.
 EOF
+    if [[ "$DURATION_MINUTES" -eq 0 ]]; then
+        # Persistent mode needs an [Install] target so it can be enabled at boot.
+        cat >>"$SERVICE_FILE" <<'EOF'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
     chmod 0644 "$SERVICE_FILE"
 }
 
