@@ -29,6 +29,7 @@ jobs:
         run: cat bootstrap-tailcat.sh | sudo bash -s -- --derp=derp1d.tailscale.com
       - name: Verify persistent service and state
         run: |
+          set -x
           test "$(systemctl show tailcat-ssh --property=User --value)" = "$(id -un)"
           test "$(systemctl show tailcat-ssh --property=Group --value)" = "$(id -gn)"
           test "$(systemctl is-enabled tailcat-ssh 2>/dev/null || true)" = enabled
