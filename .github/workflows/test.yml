@@ -25,17 +25,18 @@ jobs:
       - name: Create unreachable test identity
         run: |
           echo "ROTATED_KEY=nodekey:$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-      - name: Install and open a support window
-        run: cat bootstrap-tailcat.sh | sudo bash -s -- --duration-minutes=5
-      - name: Verify service and state
+      - name: Install persistent service (default mode)
+        run: cat bootstrap-tailcat.sh | sudo bash -s -- --derp=derp1d.tailscale.com
+      - name: Verify persistent service and state
         run: |
+          set -x
           test "$(systemctl show tailcat-ssh --property=User --value)" = "$(id -un)"
           test "$(systemctl show tailcat-ssh --property=Group --value)" = "$(id -gn)"
-          test "$(systemctl is-enabled tailcat-ssh 2>/dev/null || true)" != enabled
+          test "$(systemctl is-enabled tailcat-ssh 2>/dev/null || true)" = enabled
           sudo systemctl is-active --quiet tailcat-ssh
           sudo systemd-analyze verify /etc/systemd/system/tailcat-ssh.service
-          test "$(systemctl show tailcat-ssh --property=Restart --value)" = no
-          test "$(systemctl show tailcat-ssh --property=RuntimeMaxUSec --value)" != infinity
+          test "$(systemctl show tailcat-ssh --property=Restart --value)" = on-failure
+          test "$(systemctl show tailcat-ssh --property=RuntimeMaxUSec --value)" = infinity
           test "$(systemctl show tailcat-ssh --property=NoNewPrivileges --value)" = no
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/server.private.json)" = "$(id -un):$(id -gn):600"
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/token)" = root:root:600
@@ -48,10 +49,18 @@ jobs:
       - name: Rotate client access without changing device identity
         run: |
           before="$(sudo cat /var/lib/tailcat/token)"
-          sudo ./bootstrap-tailcat.sh --allow="$ROTATED_KEY" --derp=derp1d.tailscale.com --duration-minutes=5
+          sudo ./bootstrap-tailcat.sh --allow="$ROTATED_KEY" --derp=derp1d.tailscale.com
           after="$(sudo cat /var/lib/tailcat/token)"
           test "$before" = "$after"
           sudo grep --fixed-strings -- "--allow=$ROTATED_KEY" /etc/systemd/system/tailcat-ssh.service
+          sudo systemctl is-active --quiet tailcat-ssh
+          test "$(systemctl show tailcat-ssh --property=Restart --value)" = on-failure
+      - name: Temporary support window mode still works
+        run: |
+          sudo ./bootstrap-tailcat.sh --allow="$ROTATED_KEY" --derp=derp1d.tailscale.com --duration-minutes=5
+          test "$(systemctl is-enabled tailcat-ssh 2>/dev/null || true)" != enabled
+          test "$(systemctl show tailcat-ssh --property=Restart --value)" = no
+          test "$(systemctl show tailcat-ssh --property=RuntimeMaxUSec --value)" != infinity
           sudo systemctl is-active --quiet tailcat-ssh
       - name: Upgrade a v1.0.0 installation
         run: |
@@ -66,13 +75,14 @@ jobs:
             --allow="$ROTATED_KEY" --derp=derp1d.tailscale.com --duration-minutes=5
           before="$(sudo cat /var/lib/tailcat/token)"
           getent passwd tailcat-support
-          sudo ./bootstrap-tailcat.sh --duration-minutes=5
+          sudo ./bootstrap-tailcat.sh --derp=derp1d.tailscale.com
           after="$(sudo cat /var/lib/tailcat/token)"
           test "$before" = "$after"
           test "$(systemctl show tailcat-ssh --property=User --value)" = "$(id -un)"
           ! getent passwd tailcat-support
           ! getent group tailcat-support
           sudo systemctl is-active --quiet tailcat-ssh
+          test "$(systemctl is-enabled tailcat-ssh 2>/dev/null || true)" = enabled
       - name: Uninstall
         if: always()
         run: |
