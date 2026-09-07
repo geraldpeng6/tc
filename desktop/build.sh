@@ -51,6 +51,7 @@ echo "${BUNDLE_SHA256[$arch]}  $bundle" | sha256sum --check --status \
 
 # 3. 权限（DEBIAN 控制文件不带执行位，维护者脚本/程序 0755，sudoers 0440）
 chmod 0755 "$work/pkg/DEBIAN/postinst" \
+           "$work/pkg/DEBIAN/postrm" \
            "$work/pkg/usr/local/bin/tailcat-privileged" \
            "$work/pkg/usr/local/bin/tailcat-launcher" \
            "$work/pkg/usr/local/bin/bootstrap-tailcat"

@@ -44,20 +44,36 @@
 sudo dpkg -i tailcat-desktop_<版本>_<架构>.deb
 ```
 
-安装即把三个入口装进应用列表，并复制到每个真实用户的桌面目录
-（`xdg-user-dir DESKTOP`，含中文 locale 的 `~/桌面`），且预置 GNOME
-信任（`gio set metadata::trusted`），免首次"Allow Launching"。
+安装即把入口装进应用列表（应用列表入口无需任何信任确认），并复制到
+每个真实用户的桌面目录（`xdg-user-dir DESKTOP`，含中文 locale 的
+`~/桌面`）。桌面图标首次双击时 GNOME 会提示"不受信任"，用户右键 →
+"允许启动"一次即永久生效。
+
+## 预装（出厂镜像）
+
+```bash
+# 在镜像构建 chroot / rootfs 中（用户已创建）：
+sudo dpkg -i tailcat-desktop_<版本>_<架构>.deb
+```
+
+- 用户已存在 → postinst 直接放好图标；首次双击右键"允许启动"一次。
+- 用户后创建（firstboot 建用户）→ 图标未覆盖到该用户；如需兜底，
+  在 firstboot 建用户后重跑 `dpkg --configure tailcat-desktop`，
+  或手动复制 `/usr/share/applications/remote-support.desktop` 到其桌面。
+- 无桌面的系统（如 headless 龙虾派）：图标自然空转，
+  用户入口为 shell 里的 `tailcat-launcher`。
 
 ## 卸载
 
 ```bash
-sudo dpkg --purge tailcat-desktop        # 移除入口与脚本（桌面图标残留需手动删）
+sudo dpkg --purge tailcat-desktop        # postrm 会清理所有用户桌面的入口图标
 sudo /usr/local/bin/bootstrap-tailcat --uninstall   # 移除服务、设备身份与设备码
 ```
 
 ## 适用系统
 
-- Ubuntu/Debian 桌面（GNOME）：完整体验（应用列表 + 桌面图标 + 预信任）。
+- Ubuntu/Debian 桌面（GNOME）：完整体验（应用列表 + 桌面图标；
+  桌面图标首次需右键"允许启动"一次，应用列表入口无需）。
 - Debian 最小安装（如龙虾派，Debian 13 arm64 + zutty）：无桌面环境时
   桌面图标自然空转，用户可在 shell 直接运行 `tailcat-launcher`；
   `Terminal=true` 走 `x-terminal-emulator`（zutty 已提供）。

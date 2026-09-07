@@ -1,6 +1,7 @@
 #!/bin/sh
-# 收尾：校验 sudoers、为每个真实用户放置唯一桌面图标并尝试预置 GNOME 信任。
+# 收尾：校验 sudoers、为每个真实用户放置唯一桌面入口图标。
 # 所有失败均忽略，不影响安装结果（无桌面环境时本步骤自然空转）。
+# 不做 gio 预信任：桌面图标首次双击时由用户右键"允许启动"一次即永久生效。
 set -e
 
 SUDOERS=/etc/sudoers.d/tailcat-desktop
@@ -14,7 +15,6 @@ fi
 PLACE_ICON() {
     u="$1"
     home="$2"
-    uid="$3"
 
     dd="$(runuser -u "$u" -- xdg-user-dir DESKTOP 2>/dev/null || true)"
     case "$dd" in
@@ -37,30 +37,11 @@ PLACE_ICON() {
     cp /usr/share/applications/remote-support.desktop "$dst" 2>/dev/null || return 0
     chown "$u:$u" "$dst" 2>/dev/null || true
     chmod 755 "$dst" 2>/dev/null || true
-    set_trusted "$u" "$uid" "$dst"
-}
-
-# 预置 GNOME "Allow Launching"：必须写进用户真实会话的 gvfsd-metadata，
-# 否则 dbus-run-session 私有总线的写入会被用户已运行的 metadata 守护进程冲掉。
-# 无图形会话或无 gio 时失败，忽略。
-set_trusted() {
-    u="$1"
-    uid="$2"
-    dst="$3"
-
-    if [ -S "/run/user/$uid/bus" ]; then
-        XDG_RUNTIME_DIR="/run/user/$uid" runuser -u "$u" -- \
-            env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-            gio set "$dst" metadata::trusted true >/dev/null 2>&1 && return 0
-    fi
-    XDG_RUNTIME_DIR="/run/user/$uid" runuser -u "$u" -- \
-        dbus-run-session -- gio set "$dst" metadata::trusted true \
-        >/dev/null 2>&1 || true
 }
 
 getent passwd | awk -F: '$3 >= 1000 && $7 !~ /(nologin|false)$/ {print $1 ":" $3 ":" $6}' |
 while IFS=: read -r u uid home; do
-    PLACE_ICON "$u" "$home" "$uid" || true
+    PLACE_ICON "$u" "$home" || true
 done
 
 exit 0
