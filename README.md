@@ -1,96 +1,65 @@
 # tailcat-bootstrap
 
-在 Debian/Ubuntu 系硬件上安装一个 Tailcat 远程入口。不开放公网入站端口，不需要 Tailscale 账号。
+在 Debian/Ubuntu 设备上安装 Tailcat 远程入口，需要 systemd，支持 amd64、arm64 和 ARMv7 armhf。
 
-**默认为常驻模式**：服务开机自启、崩溃自动重启、令牌永不过期，机器重启后无需任何人到场即可远程接入。需要临时性窗口时使用 `--duration-minutes`。
+## 安装
 
-Installer SHA256: `c30b79663d1572f8397330f5e6b94bd7271fcd91a3875504bec10b06cb5d9181`
-
-## 一行安装
+在需要远程接入的现有用户下执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.3/bootstrap-tailcat.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh | sudo bash
 ```
 
-安装器默认使用内置的售后客户端公钥和 `derp1d.tailscale.com`，并打印设备的 `tc...` token。
+默认开机自启、故障自动重启，安装完成后显示设备 token。远程终端使用执行 `sudo` 的用户，沿用其现有权限。
 
-## 权限模型
-
-- 默认安装**常驻服务**：`Restart=on-failure` + 开机自启，令牌永久有效。
-- Tailcat 服务使用执行 `sudo` 的现有登录用户，不会创建 `tailcat-support` 用户。
-- 远程终端拥有该用户本来的文件、设备组和 sudo 权限。该用户原本能 sudo 时，可在远程终端输入该用户自己的密码运行 `sudo`；安装器不会保存密码或修改 sudoers。
-- 允许 sudo 意味着取得售后私钥和 sudo 密码的人可以完全控制设备。售后私钥和设备密码不能公开或共用泄漏。
-- `journalctl` 记录连接方 node key 和网络事件，但不记录完整 shell 命令。
-
-`derp1d.tailscale.com` 是测试用公共 DERP，没有商业可用性承诺。正式售后应改为自建 DERP。
+默认使用内置售后公钥和公共中继 `derp1d.tailscale.com`，无需 Tailscale 账号或开放公网入站端口。公共中继不保证可用性，可通过 `--derp` 指定自建中继。
 
 ## 连接
 
-在售后电脑把内置公钥对应的私钥保存为 Tailcat 的 `client-default`，然后连接：
+在售后电脑将内置公钥对应的私钥保存为 Tailcat 的 `client-default`，然后执行：
 
 ```bash
 tailcat ping <设备 token>
 tailcat ssh <设备 token>
 ```
 
-进入远程终端后：
+远程执行 `sudo` 时使用设备上该用户的密码。妥善保管售后私钥和设备密码。
+
+## 常用操作
 
 ```bash
-whoami
-sudo -v
-sudo <维修命令>
+systemctl status tailcat-ssh       # 查看状态
+sudo systemctl stop tailcat-ssh    # 停止服务
+sudo systemctl start tailcat-ssh   # 启动服务
+sudo journalctl -u tailcat-ssh     # 查看连接日志
 ```
 
-`sudo` 验证的是 `whoami` 显示用户的密码，不是一个通用的 root 密码。
-
-## 常驻 vs 临时窗口
-
-默认（无参数）安装常驻服务：
+需要传入参数时，先下载脚本：
 
 ```bash
-sudo bash bootstrap-tailcat.sh          # 常驻: 开机自启 + 自动重启
-```
-
-需要限时窗口（如给外部支持人员临时开门）时加 `--duration-minutes`，5 至 1440 分钟：
-
-```bash
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh -o bootstrap-tailcat.sh
 sudo bash bootstrap-tailcat.sh --duration-minutes=120
 ```
 
-限时模式下服务不随开机启动，到期自动断开；每次 `systemctl start` 都重新开启同样时长的窗口。两种模式下设备身份（token）都保持不变。
+临时窗口支持 5–1440 分钟，到期停止，不随开机启动；每次启动服务重新计时。再次不带参数运行安装器可恢复常驻模式。
 
-## 状态与控制
-
-```bash
-systemctl status tailcat-ssh        # 查看状态
-sudo systemctl stop tailcat-ssh     # 立即关闭入口
-sudo systemctl start tailcat-ssh    # 重新打开
-sudo journalctl -u tailcat-ssh      # 连接日志
-```
-
-## 覆盖默认配置
-
-默认公钥和 DERP 仍可覆盖：
+覆盖售后公钥或中继：
 
 ```bash
-sudo bash bootstrap-tailcat.sh --allow='nodekey:...' --derp='derp.example.com'
-sudo bash bootstrap-tailcat.sh --allow='nodekey:...' --public-derp
+sudo bash bootstrap-tailcat.sh --allow='nodekey:...'
+sudo bash bootstrap-tailcat.sh --derp='derp.example.com'
 ```
 
-重复运行且不传这些参数时，会保留设备上已经保存的公钥列表、DERP、设备身份和 token。传入新的 `--allow` 会完整替换旧列表。
+重复运行会保留设备身份和 token，以及未指定的公钥和中继配置。`--allow` 替换整个公钥列表；已有设备更换中继需要卸载重装，生成新 token。更多参数见 `--help`。
 
-## 兼容和卸载
-
-- 支持 Debian、Ubuntu、systemd，以及 `amd64`、`arm64`、ARMv7 `armhf`。
-- 不支持 ARMv6、RPM 发行版和非 systemd 容器。
-- 从 `bootstrap-v1.0.0` 升级时会删除旧安装器创建的 `tailcat-support` 系统用户，改用本次执行 `sudo` 的登录用户。
+## 卸载
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.1.3/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
 ```
 
-卸载会删除服务、设备私钥和 token，但不会删除或修改原登录用户。Tailcat 软件包会保留，必要时运行 `sudo dpkg --remove tailcat`。
+删除服务、设备私钥和 token。Tailcat 软件包保留，如需移除：
 
-## 发布要求
-
-客户会以 root 执行此脚本，因此每次修改都必须通过 CI、发布新的不可移动 tag，并在干净设备上验证安装、远程登录、sudo、重启窗口、升级和卸载。不能移动已经发布的 tag。
+```bash
+sudo dpkg --remove tailcat
+```
