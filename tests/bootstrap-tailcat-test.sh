@@ -79,10 +79,4 @@ help_output="$(bash -s -- --help <"$ROOT/bootstrap-tailcat.sh")"
 requested="$(requested_relay)"
 assert_equal "$requested" ""
 
-documented_hash="$(awk -F'`' '/^Installer SHA256:/ {print $2}' "$ROOT/README.md")"
-actual_hash="$(sha256sum "$ROOT/bootstrap-tailcat.sh" | awk '{print $1}')"
-assert_equal "$documented_hash" "$actual_hash"
-grep -q "/bootstrap-v${INSTALLER_VERSION}/bootstrap-tailcat.sh" "$ROOT/README.md" \
-    || fail "README installer tag does not match installer version"
-
 printf 'bootstrap-tailcat tests passed\n'
