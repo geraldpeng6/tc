@@ -37,7 +37,22 @@ PLACE_ICON() {
     cp /usr/share/applications/remote-support.desktop "$dst" 2>/dev/null || return 0
     chown "$u:$u" "$dst" 2>/dev/null || true
     chmod 755 "$dst" 2>/dev/null || true
-    # 预置 GNOME "Allow Launching"（无图形会话或无 gio 时失败，忽略）
+    set_trusted "$u" "$uid" "$dst"
+}
+
+# 预置 GNOME "Allow Launching"：必须写进用户真实会话的 gvfsd-metadata，
+# 否则 dbus-run-session 私有总线的写入会被用户已运行的 metadata 守护进程冲掉。
+# 无图形会话或无 gio 时失败，忽略。
+set_trusted() {
+    u="$1"
+    uid="$2"
+    dst="$3"
+
+    if [ -S "/run/user/$uid/bus" ]; then
+        XDG_RUNTIME_DIR="/run/user/$uid" runuser -u "$u" -- \
+            env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            gio set "$dst" metadata::trusted true >/dev/null 2>&1 && return 0
+    fi
     XDG_RUNTIME_DIR="/run/user/$uid" runuser -u "$u" -- \
         dbus-run-session -- gio set "$dst" metadata::trusted true \
         >/dev/null 2>&1 || true
