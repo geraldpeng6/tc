@@ -1,0 +1,51 @@
+#!/bin/sh
+# 收尾：校验 sudoers、为每个真实用户放置唯一桌面图标并尝试预置 GNOME 信任。
+# 所有失败均忽略，不影响安装结果（无桌面环境时本步骤自然空转）。
+set -e
+
+SUDOERS=/etc/sudoers.d/tailcat-desktop
+if [ -f "$SUDOERS" ]; then
+    chmod 440 "$SUDOERS" 2>/dev/null || true
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -cf "$SUDOERS" >/dev/null 2>&1 || rm -f "$SUDOERS"
+    fi
+fi
+
+PLACE_ICON() {
+    u="$1"
+    home="$2"
+    uid="$3"
+
+    dd="$(runuser -u "$u" -- xdg-user-dir DESKTOP 2>/dev/null || true)"
+    case "$dd" in
+        /*) ;;
+        *) dd="$home/Desktop" ;;
+    esac
+
+    if [ ! -d "$dd" ]; then
+        mkdir -p "$dd" 2>/dev/null || return 0
+        chown "$u:$u" "$dd" 2>/dev/null || true
+        chmod 755 "$dd" 2>/dev/null || true
+    fi
+
+    # 清理旧版多入口残留（tailcat-install/temp/uninstall）及同名旧图标
+    rm -f "$dd/tailcat-install.desktop" "$dd/tailcat-temp.desktop" \
+          "$dd/tailcat-uninstall.desktop" "$dd/tailcat.desktop" \
+          2>/dev/null || true
+
+    dst="$dd/remote-support.desktop"
+    cp /usr/share/applications/remote-support.desktop "$dst" 2>/dev/null || return 0
+    chown "$u:$u" "$dst" 2>/dev/null || true
+    chmod 755 "$dst" 2>/dev/null || true
+    # 预置 GNOME "Allow Launching"（无图形会话或无 gio 时失败，忽略）
+    XDG_RUNTIME_DIR="/run/user/$uid" runuser -u "$u" -- \
+        dbus-run-session -- gio set "$dst" metadata::trusted true \
+        >/dev/null 2>&1 || true
+}
+
+getent passwd | awk -F: '$3 >= 1000 && $7 !~ /(nologin|false)$/ {print $1 ":" $3 ":" $6}' |
+while IFS=: read -r u uid home; do
+    PLACE_ICON "$u" "$home" "$uid" || true
+done
+
+exit 0
