@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# 图形/终端入口：询问授权时长 → 限时开启远程支持（默认 2 小时，1-24 小时可选）。
+# 优先使用包内 sudoers 免密白名单；不可用时回落 pkexec / 终端 sudo。
+set -u
+
+PRIV=/usr/local/bin/tailcat-privileged
+OUT="$(mktemp)"
+trap 'rm -f "$OUT"' EXIT
+
+ask_hours() {
+    local h
+    while :; do
+        echo "  本程序将临时开启远程支持，供技术人员远程协助处理问题。" >&2
+        echo "  授权到期后远程支持自动关闭，不随开机启动。" >&2
+        echo >&2
+        read -rp "  请输入授权时长（小时，1-24；直接回车默认 2 小时）: " h || h=""
+        case "$h" in
+            "") echo 2; return ;;
+            *[!0-9]*) echo "  输入无效，请输入 1-24 之间的数字。" >&2 ;;
+            *) if [ "$h" -ge 1 ] && [ "$h" -le 24 ]; then echo "$h"; return; fi
+               echo "  超出范围，请输入 1-24 之间的数字。" >&2 ;;
+        esac
+    done
+}
+
+run_privileged() {
+    if sudo -l -n "$PRIV" >/dev/null 2>&1; then
+        sudo -n "$PRIV" "$@"
+    elif command -v pkexec >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        echo "即将弹出系统授权窗口，请输入管理员密码…"
+        pkexec /usr/bin/env SUDO_USER="$USER" "$PRIV" "$@" ||
+            sudo -p "授权窗口已取消或失败，改用终端授权，请输入密码: " "$PRIV" "$@"
+    else
+        sudo -p "请输入密码继续: " "$PRIV" "$@"
+    fi
+}
+
+copy_to_clipboard() {
+    if command -v wl-copy >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        printf '%s' "$1" | wl-copy 2>/dev/null
+    elif command -v xclip >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+        printf '%s' "$1" | xclip -selection clipboard 2>/dev/null
+    fi
+}
+
+HOURS="$(ask_hours)"
+MINUTES=$((HOURS * 60))
+
+echo
+echo "== 请求技术支持 =="
+echo "正在开启 ${HOURS} 小时远程支持（无需联网下载，约需一两分钟）…"
+echo
+
+run_privileged --duration-minutes="$MINUTES" 2>&1 | tee "$OUT"
+RC=${PIPESTATUS[0]:-$?}
+
+TOKEN="$(grep -E '^tc[A-Za-z0-9_-]+$' "$OUT" | tail -1 || true)"
+
+echo
+echo "================================================"
+if [ "$RC" -eq 0 ] && [ -n "$TOKEN" ]; then
+    echo "  完成！远程支持已开启，${HOURS} 小时后自动关闭。"
+    echo
+    if copy_to_clipboard "$TOKEN"; then
+        echo "  设备码已自动复制，请直接粘贴发给技术人员："
+    else
+        echo "  请用鼠标选中并复制下面的【设备码】，发给技术人员："
+    fi
+    echo
+    echo "  $TOKEN"
+    echo
+    echo "------------------------------------------------"
+    echo "  · 想延长？重新打开本程序，再输入一次时长即可。"
+    echo "  · 这个窗口现在就可以关闭了（按回车，或点右上角 ×），"
+    echo "    关闭窗口不影响剩余时长。"
+elif [ "$RC" -eq 0 ]; then
+    echo "  程序已执行完成，但没有取到设备码。"
+    echo "  请把上方完整输出发给技术人员确认。"
+    echo
+    echo "  这个窗口现在就可以关闭了。"
+else
+    echo "  本次未能完成，常见原因是网络暂不可用。"
+    echo "  请检查网络后重新打开本程序再试一次；"
+    echo "  如仍失败，请把上方信息拍照或截图发给技术人员。"
+    echo
+    echo "  这个窗口现在就可以关闭了。"
+fi
+echo "================================================"
+echo
+read -rp "按回车关闭…"
+exit "$RC"

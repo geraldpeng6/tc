@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=请求技术支持
+GenericName=远程支持
+Comment=按需开启限时远程支持，可选时长（默认 2 小时，到期自动关闭）
+Exec=tailcat-launcher
+Terminal=true
+Icon=utilities-terminal
+Categories=Utility;System;
+Keywords=support;remote;远程;技术支持;售后;帮助;请求;

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# root 权限包装器（sudoers 白名单唯一放行的程序）：
+# 确保捆绑的离线 deb 就位后，执行官方引导脚本完成服务配置。
+set -euo pipefail
+
+readonly TAILCAT_VERSION="0.4.0"
+readonly BUNDLE_DIR="/usr/local/share/tailcat"
+readonly BOOTSTRAP="/usr/local/bin/bootstrap-tailcat"
+
+installed="$(dpkg-query --show --showformat='${Version}' tailcat 2>/dev/null || true)"
+if [ -z "$installed" ] || dpkg --compare-versions "$installed" lt "$TAILCAT_VERSION"; then
+    deb="$(ls "$BUNDLE_DIR"/tailcat_*_linux_*.deb 2>/dev/null | head -1 || true)"
+    if [ -z "$deb" ]; then
+        echo "错误：未找到捆绑的离线安装包（$BUNDLE_DIR）" >&2
+        exit 1
+    fi
+    echo "安装捆绑的离线包 v$TAILCAT_VERSION（无需联网）…"
+    dpkg --install "$deb"
+else
+    echo "远程支持组件 v$installed 已就位，跳过离线安装包"
+fi
+
+exec "$BOOTSTRAP" "$@"
