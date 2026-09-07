@@ -1,11 +1,9 @@
 #!/bin/sh
-# 卸载/清除：移除所有用户桌面上的入口图标与登录信任服务。
+# 卸载/清除：收回本包放到各用户桌面上的入口图标（按精确文件名，不碰其他文件）。
 # 所有失败均忽略。
 set -e
 
 if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
-    systemctl --global disable tailcat-icon-trust.service >/dev/null 2>&1 || true
-
     getent passwd | awk -F: '$3 >= 1000 && $7 !~ /(nologin|false)$/ {print $1 ":" $3 ":" $6}' |
     while IFS=: read -r u uid home; do
         dd="$(runuser -u "$u" -- xdg-user-dir DESKTOP 2>/dev/null || true)"
@@ -13,9 +11,7 @@ if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
             /*) ;;
             *) dd="$home/Desktop" ;;
         esac
-        rm -f "$dd/remote-support.desktop" "$dd/tailcat.desktop" \
-              "$dd/tailcat-install.desktop" "$dd/tailcat-temp.desktop" \
-              "$dd/tailcat-uninstall.desktop" 2>/dev/null || true
+        rm -f "$dd/remote-support.desktop" 2>/dev/null || true
     done
 fi
 
