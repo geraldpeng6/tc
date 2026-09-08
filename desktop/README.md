@@ -32,7 +32,7 @@
 
 ```bash
 ./build.sh [amd64|arm64|armv7] [版本号]
-# 例：./build.sh arm64 2.0.0 → tailcat-desktop_2.0.0_arm64.deb
+# 省略版本号时使用 build.sh 中的 DEFAULT_VERSION。
 ```
 
 构建脚本从 tailscale 官方 release 下载对应架构的 tailcat deb 并按

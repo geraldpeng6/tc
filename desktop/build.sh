@@ -3,14 +3,14 @@
 # 必须在带 dpkg-deb 的 Debian/Ubuntu 环境运行（本地或 CI）。
 #
 # 用法: ./build.sh [amd64|arm64|armv7] [版本号]
-#   默认 amd64，默认版本 2.0.0。
+#   默认 amd64，默认版本见 DEFAULT_VERSION。
 #   从 ../bootstrap-tailcat.sh 取引导脚本（需在 tc 仓库内构建）。
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 readonly TAILCAT_VERSION="0.4.0"
-readonly DEFAULT_VERSION="2.0.0"
+readonly DEFAULT_VERSION="2.1.0"
 readonly RELEASE_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 
 readonly -A ASSET=(
@@ -27,7 +27,7 @@ readonly -A BUNDLE_SHA256=(
 readonly -A DPKG_ARCH=([amd64]=amd64 [arm64]=arm64 [armv7]=armhf)
 
 arch="${1:-amd64}"
-version="${2:-2.0.0}"
+version="${2:-$DEFAULT_VERSION}"
 [[ -n "${ASSET[$arch]:-}" ]] || { echo "不支持的架构: $arch（可选 amd64/arm64/armv7）" >&2; exit 1; }
 
 work="$(mktemp -d)"
