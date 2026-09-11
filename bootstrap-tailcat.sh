@@ -2,8 +2,7 @@
 
 set -Eeuo pipefail
 umask 077
-
-readonly INSTALLER_VERSION="1.1.3"
+readonly INSTALLER_VERSION="1.1.4"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly TAILCAT_BIN="/usr/bin/tailcat"
@@ -444,8 +443,17 @@ prepare_identity() {
     fi
     [[ ! -e "$KEY_FILE" || -s "$KEY_FILE" ]] || die "server key is empty"
     if [[ -s "$KEY_FILE" && -s "$LEGACY_KEY_FILE" ]]; then
-        cmp --silent "$KEY_FILE" "$LEGACY_KEY_FILE" || die "new and legacy server keys conflict"
-        MIGRATED_LEGACY_KEY=1
+        if cmp --silent "$KEY_FILE" "$LEGACY_KEY_FILE"; then
+            MIGRATED_LEGACY_KEY=1
+        elif [[ -s "$RELAY_FILE" && -s "$TOKEN_FILE" ]]; then
+            # 新身份已完整建立（key+relay+token），服务只读 KEY_FILE；
+            # 残留的旧 key 不再被使用，移除以免每次重跑都误报冲突。
+            warn "removing stale legacy server key; the installed identity is unchanged"
+            rm -f -- "$LEGACY_KEY_FILE"
+        else
+            # 新身份半建立时无法判断哪个 key 对应在用的 token，保持失败。
+            die "new and legacy server keys conflict"
+        fi
     fi
 
     if [[ -s "$KEY_FILE" ]]; then
