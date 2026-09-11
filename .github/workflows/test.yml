@@ -55,6 +55,15 @@ jobs:
           sudo grep --fixed-strings -- "--allow=$ROTATED_KEY" /etc/systemd/system/tailcat-ssh.service
           sudo systemctl is-active --quiet tailcat-ssh
           test "$(systemctl show tailcat-ssh --property=Restart --value)" = on-failure
+      - name: Re-run removes a stale legacy key without changing identity
+        run: |
+          before="$(sudo cat /var/lib/tailcat/token)"
+          echo stale-legacy-key | sudo tee /root/.config/tailcat/keys/default.private.json >/dev/null
+          sudo ./bootstrap-tailcat.sh --derp=derp1d.tailscale.com
+          test ! -e /root/.config/tailcat/keys/default.private.json
+          after="$(sudo cat /var/lib/tailcat/token)"
+          test "$before" = "$after"
+          sudo systemctl is-active --quiet tailcat-ssh
       - name: Temporary support window mode still works
         run: |
           sudo ./bootstrap-tailcat.sh --allow="$ROTATED_KEY" --derp=derp1d.tailscale.com --duration-minutes=5
