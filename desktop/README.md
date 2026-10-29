@@ -11,7 +11,8 @@
 | --- | --- |
 | `pkg/usr/local/bin/bootstrap-tailcat.sh` | tc 仓库官方引导脚本（构建时原样打入，不修改） |
 | `pkg/usr/local/bin/tailcat-privileged` | root 包装器（sudoers 唯一白名单项）：安装捆绑 deb 后调用引导脚本 |
-| `pkg/usr/local/bin/tailcat-launcher` | 用户入口：问授权时长 → 免密/授权执行 → 中文摘要（设备码 + 可关窗提示） |
+| `pkg/usr/local/bin/tailcat-launcher` | 用户入口：问授权时长 → 免密/授权执行 → 中文摘要（设备码 + 二维码 + 可关窗提示） |
+| `pkg/usr/local/lib/tailcat/qrcode.py` | 零依赖二维码渲染（纯 Python 标准库，等级 M，版本 1-10）：终端半块字符 + 显式黑白 ANSI 颜色，深色=黑、浅色=白 |
 | `pkg/etc/sudoers.d/tailcat-desktop` | 免密白名单，只放行 root-owned 的 `tailcat-privileged` |
 | `pkg/usr/share/applications/remote-support.desktop` | 应用列表/桌面入口（Name=请求技术支持） |
 | `pkg/usr/local/share/tailcat/tailcat_*.deb` | 构建时下载的 tailcat 离线安装包（SHA256 与引导脚本内固定值一致） |
@@ -23,6 +24,9 @@
   不随开机启动；重新打开程序并再次授权即重新计时/延长。
 - 设备码（token）持久于 `/var/lib/tailcat/`，临时/常驻切换与重复执行均不变；
   仅 `--uninstall` 或更换 `--derp` 会生成新 token。
+- **设备码同时以二维码 + 文本展示**：二维码用内置零依赖渲染器画在终端里
+  （无 python3 时自动退化为纯文本）；用户拍照二维码即可，避免
+  `I/l/1`、`0/O` 等易混字符抄错。token 任何时候都不回传到任何服务器。
 - 引导脚本默认会探测 DERP 中继连通性：设备完全无网时会明确报错
   （远程支持依赖 DERP，离线捆绑解决的是"下载安装包"环节）。
 

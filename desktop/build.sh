@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 readonly TAILCAT_VERSION="0.4.0"
-readonly DEFAULT_VERSION="2.1.0"
+readonly DEFAULT_VERSION="2.1.1"
 readonly RELEASE_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 
 readonly -A ASSET=(

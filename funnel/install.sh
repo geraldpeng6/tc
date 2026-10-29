@@ -11,6 +11,8 @@
 #   - 显式 --derp / --public-derp / --uninstall / --help：跳过自动选路。
 #   - --no-auto-derp：禁用自动选路，使用 bootstrap 内置默认中继。
 #
+# token 不回传：安装完成后由用户在设备上查看（终端文本/二维码）并手动转发。
+#
 # 其余参数原样透传给 bootstrap-tailcat.sh。
 
 set -Eeuo pipefail
@@ -18,10 +20,7 @@ umask 077
 
 log()  { printf '[install] %s\n' "$*"; }
 warn() { printf '[install] WARNING: %s\n' "$*" >&2; }
-readonly KEY_FILE="/var/lib/tailcat/server.private.json"
-readonly TOKEN_FILE="/var/lib/tailcat/token"
-# 上传密钥只用于向 /api/token 追加写入，无读取能力；公开可见但仅挡垃圾提交。
-readonly UPLOAD_KEY="${TAILCAT_UPLOAD_KEY:-}"
+die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 # Tailscale 官方 DERP 每区域一个代表节点（derpmap 2026-09 快照）。
 readonly -a DERP_CANDIDATES=(
@@ -69,15 +68,12 @@ Usage: sudo bash install.sh [bootstrap options]
 
 额外选项：
   --no-auto-derp   禁用自动选路，使用 bootstrap 内置默认中继
-  --no-upload      安装成功后不回传设备 token 到安装源
 
 其余参数（--allow / --derp / --public-derp / --duration-minutes /
 --uninstall 等）原样透传给 bootstrap-tailcat.sh。
 
 环境变量：
-  TAILCAT_INSTALL_URL  入口自身 URL（决定 bootstrap 下载源与默认上传地址）
-  TAILCAT_UPLOAD_URL   覆盖 token 回传地址（默认 <入口目录>/api/token）
-  TAILCAT_UPLOAD_KEY   上传密钥；未设置则跳过回传
+  TAILCAT_INSTALL_URL  入口自身 URL（决定 bootstrap 下载源；必填）
 EOF
 }
 
@@ -110,35 +106,14 @@ pick_derp() {
     sort -n "${dir}"/* 2>/dev/null | awk 'NR==1 {print $2}'
 }
 
-# upload_token <api-url>：bootstrap 成功后把设备 token 回传到安装源。
-# best-effort：失败只警告，不影响安装结果。
-upload_token() {
-    local upload_url="$1" token host
-    [[ -n "$UPLOAD_KEY" ]] || return 0   # 未配置上传密钥时静默跳过
-    [[ -s "$TOKEN_FILE" ]] || return 0
-    token="$(<"$TOKEN_FILE")"
-    host="$(hostname 2>/dev/null || uname -n 2>/dev/null || true)"
-    local body
-    body="$(printf '{"token":"%s","host":"%s"}' "$token" "$host")"
-    if curl --fail --silent --show-error --max-time 10 \
-        --request POST --header "Content-Type: application/json" \
-        --header "X-Upload-Key: ${UPLOAD_KEY}" \
-        --data "$body" "$upload_url" >/dev/null 2>&1; then
-        log "设备 token 已回传到安装源"
-    else
-        warn "token 回传失败（不影响安装）；请手动发送 token"
-    fi
-}
-
 main() {
     local -a args=()
-    local explicit_relay=0 no_auto=0 skip_probe=0 no_upload=0
+    local explicit_relay=0 no_auto=0 skip_probe=0
 
     while (($# > 0)); do
         case "$1" in
             --no-auto-derp) no_auto=1; shift ;;
             -h|--help)      skip_probe=1; args+=("$1"); shift ;;
-            --no-upload)    no_upload=1; shift ;;
             --uninstall)    skip_probe=1; args+=("$1"); shift ;;
             --derp=*|--public-derp)
                 explicit_relay=1; args+=("$1"); shift ;;
@@ -157,10 +132,12 @@ main() {
 
     # 与入口同源的官方 bootstrap 脚本。
     local self_url bootstrap_url bootstrap
-    self_url="${TAILCAT_INSTALL_URL:-https://macbook-pro.tailbd35f2.ts.net/install.sh}"
+    [[ -n "${TAILCAT_INSTALL_URL:-}" ]] \
+        || die "未设置 TAILCAT_INSTALL_URL（入口自身 URL，如 https://<host>/install.sh）"
+    self_url="${TAILCAT_INSTALL_URL}"
     bootstrap_url="${self_url%/*}/bootstrap-tailcat.sh"
     bootstrap="${TMP_DIR}/bootstrap-tailcat.sh"
-    curl --fail --show-error --silent --location --max-time 60 \
+    curl --fail --show-error --silent --location --max-time 180 \
         --output "$bootstrap" "$bootstrap_url" \
         || die "下载 bootstrap 失败: ${bootstrap_url}"
 
@@ -186,13 +163,8 @@ main() {
     fi
 
     local rc=0
-    bash "$bootstrap" "${args[@]}" || rc=$?
-
-    # 安装成功且非卸载/帮助路径时回传 token；失败不阻塞退出码。
-    if ((rc == 0 && !skip_probe && !no_upload)); then
-        local upload_url="${TAILCAT_UPLOAD_URL:-${self_url%/*}/api/token}"
-        upload_token "$upload_url"
-    fi
+    # bash 3.2 (macOS) + set -u: 空数组展开必须用 @+ 哨兵，否则报 unbound variable。
+    bash "$bootstrap" "${args[@]+"${args[@]}"}" || rc=$?
     return "$rc"
 }
 

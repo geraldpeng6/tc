@@ -4,7 +4,7 @@ Section: utils
 Priority: optional
 Architecture: @ARCH@
 Depends: curl, ca-certificates
-Recommends: x-terminal-emulator
+Recommends: x-terminal-emulator, python3
 Maintainer: geraldpeng6 <geraldpeng6@users.noreply.github.com>
 Description: 请求技术支持 — 限时远程支持桌面入口（离线捆绑版）
  应用列表/桌面双击即可按需开启限时远程支持，可选 1-24 小时，

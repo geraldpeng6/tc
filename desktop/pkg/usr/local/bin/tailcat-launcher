@@ -61,6 +61,14 @@ echo "================================================"
 if [ "$RC" -eq 0 ] && [ -n "$TOKEN" ]; then
     echo "  完成！远程支持已开启，${HOURS} 小时后自动关闭。"
     echo
+    if command -v python3 >/dev/null 2>&1 && [ -r /usr/local/lib/tailcat/qrcode.py ]; then
+        if python3 /usr/local/lib/tailcat/qrcode.py "$TOKEN" 2>/dev/null; then
+            echo
+            echo "  ↑ 设备码二维码：直接拍照发给技术人员即可。"
+            echo "  （下方文字与二维码内容相同，扫码失败时再发文字）"
+            echo
+        fi
+    fi
     if copy_to_clipboard "$TOKEN"; then
         echo "  设备码已自动复制，请直接粘贴发给技术人员："
     else
