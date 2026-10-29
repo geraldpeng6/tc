@@ -23,7 +23,8 @@ log()  { printf '[bootstrap] %s\n' "$*"; }
 warn() { printf '[bootstrap] WARNING: %s\n' "$*" >&2; }
 die()  { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 
-readonly OS="$(uname -s)"
+OS="$(uname -s)"
+readonly OS
 case "$OS" in
     Linux)
         readonly TAILCAT_BIN="/usr/bin/tailcat"
@@ -104,7 +105,11 @@ service_is_active() {
 service_is_enabled() {
     if [[ "$OS" == "Darwin" ]]; then
         # print-disabled 只列出显式覆盖；未出现即默认 enabled。
-        ! launchctl print-disabled system 2>/dev/null | grep -q "\"${SERVICE_NAME}\" => disabled"
+        if launchctl print-disabled system 2>/dev/null |
+                grep -q "\"${SERVICE_NAME}\" => disabled"; then
+            return 1
+        fi
+        return 0
     else
         systemctl is-enabled --quiet "$SERVICE_NAME"
     fi
@@ -855,7 +860,7 @@ start_support_window() {
                     --allow="$ALLOWED_CLIENTS" no-auth-ssh \
                     >>"$SERVICE_LOG" 2>&1 &
                 FALLBACK_PID=$!
-                for ((attempt = 0; attempt < 60; attempt++)); do
+                for ((fallback_wait = 0; fallback_wait < 60; fallback_wait++)); do
                     [[ -s "$RUNTIME_TOKEN" ]] && break
                     kill -0 "$FALLBACK_PID" 2>/dev/null \
                         || service_failure "fallback serve exited before publishing its token"
