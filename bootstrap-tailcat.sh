@@ -2,10 +2,9 @@
 
 set -Eeuo pipefail
 umask 077
-readonly INSTALLER_VERSION="1.1.4"
+readonly INSTALLER_VERSION="1.2.4"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
-readonly TAILCAT_BIN="/usr/bin/tailcat"
 readonly DEFAULT_ALLOWED_CLIENTS="nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
 readonly DEFAULT_DERP_HOSTS="derp1d.tailscale.com"
 
@@ -19,12 +18,38 @@ readonly TOKEN_FILE="${STATE_DIR}/token"
 readonly ALLOW_FILE="${STATE_DIR}/allowed-clients"
 readonly RELAY_FILE="${STATE_DIR}/relay"
 readonly MANAGED_USER_FILE="${STATE_DIR}/managed-user"
-readonly LEGACY_KEY_FILE="/root/.config/tailcat/keys/default.private.json"
 
-readonly SERVICE_NAME="tailcat-ssh"
-readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-readonly RUNTIME_TOKEN="/run/tailcat-support/token"
-readonly LOCK_FILE="/run/tailcat-bootstrap.lock"
+log()  { printf '[bootstrap] %s\n' "$*"; }
+warn() { printf '[bootstrap] WARNING: %s\n' "$*" >&2; }
+die()  { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
+
+readonly OS="$(uname -s)"
+case "$OS" in
+    Linux)
+        readonly TAILCAT_BIN="/usr/bin/tailcat"
+        readonly LEGACY_KEY_FILE="/root/.config/tailcat/keys/default.private.json"
+        readonly SERVICE_NAME="tailcat-ssh"
+        readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+        readonly RUNTIME_TOKEN="/run/tailcat-support/token"
+        readonly LOCK_FILE="/run/tailcat-bootstrap.lock"
+        readonly ROOT_GROUP="root"
+        ;;
+    Darwin)
+        # tailcat 没有官方 macOS 发布物；按 README 走 Homebrew，
+        # 具体路径由 install_tailcat() 在安装后解析。
+        TAILCAT_BIN=""
+        readonly LEGACY_KEY_FILE="/var/root/.config/tailcat/keys/default.private.json"
+        readonly SERVICE_NAME="org.tailcat.ssh"
+        readonly SERVICE_FILE="/Library/LaunchDaemons/${SERVICE_NAME}.plist"
+        readonly RUNTIME_DIR="${STATE_DIR}/run"
+        readonly RUNTIME_TOKEN="${RUNTIME_DIR}/token"
+        readonly SERVICE_LOG="${RUNTIME_DIR}/service.log"
+        readonly WRAPPER_FILE="${STATE_DIR}/run-with-timeout.sh"
+        readonly LOCK_FILE="${STATE_DIR}/bootstrap.lock"
+        readonly ROOT_GROUP="wheel"
+        ;;
+    *) die "only Linux and macOS are supported" ;;
+esac
 
 readonly -a DOWNLOAD_PROXIES=(
     ""
@@ -49,6 +74,7 @@ EXPECTED_SHA256=""
 TOKEN=""
 MIGRATED_LEGACY_KEY=0
 SERVICE_STARTED=0
+FALLBACK_PID=""
 SERVICE_SNAPSHOT_READY=0
 SERVICE_UPDATE_STARTED=0
 SERVICE_FILE_EXISTED=0
@@ -57,9 +83,32 @@ SERVICE_WAS_ENABLED=0
 SERVICE_BACKUP_FILE=""
 INSTALL_COMPLETE=0
 
-log()  { printf '[bootstrap] %s\n' "$*"; }
-warn() { printf '[bootstrap] WARNING: %s\n' "$*" >&2; }
-die()  { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
+# ---- 服务管理抽象：Linux=systemd，macOS=launchd ----
+
+service_stop() {
+    if [[ "$OS" == "Darwin" ]]; then
+        launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+    else
+        systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+}
+
+service_is_active() {
+    if [[ "$OS" == "Darwin" ]]; then
+        launchctl print "system/${SERVICE_NAME}" 2>/dev/null | grep -qE 'state = (running|spawning|xpcproxy)'
+    else
+        systemctl is-active --quiet "$SERVICE_NAME"
+    fi
+}
+
+service_is_enabled() {
+    if [[ "$OS" == "Darwin" ]]; then
+        # print-disabled 只列出显式覆盖；未出现即默认 enabled。
+        ! launchctl print-disabled system 2>/dev/null | grep -q "\"${SERVICE_NAME}\" => disabled"
+    else
+        systemctl is-enabled --quiet "$SERVICE_NAME"
+    fi
+}
 
 usage() {
     cat <<'EOF'
@@ -89,6 +138,10 @@ Options:
 In the default persistent mode the service runs as the user who invoked
 sudo, inherits that user's existing sudo policy, and restarts
 automatically after failures or reboots.
+
+Platforms:
+  Linux (Debian/Ubuntu): tailcat .deb package, systemd service.
+  macOS:                 tailcat via Homebrew, launchd daemon.
 EOF
 }
 
@@ -185,12 +238,24 @@ preflight() {
     local os_id="" os_id_like=""
 
     need_root
-    [[ "$(uname -s)" == "Linux" ]] || die "only Linux is supported"
-    [[ -d /run/systemd/system ]] || die "systemd is not running"
-    for command_name in flock getent groupdel id systemctl userdel; do
-        need_command "$command_name"
-    done
+    if [[ "$OS" == "Darwin" ]]; then
+        for command_name in awk curl dscacheutil dscl id install launchctl mktemp plutil shlock sudo; do
+            need_command "$command_name"
+        done
+    else
+        [[ -d /run/systemd/system ]] || die "systemd is not running"
+        for command_name in flock getent groupdel id systemctl userdel; do
+            need_command "$command_name"
+        done
+    fi
     [[ "$MODE" == "install" ]] || return 0
+
+    if [[ "$OS" == "Darwin" ]]; then
+        for command_name in cmp cp grep shasum; do
+            need_command "$command_name"
+        done
+        return 0
+    fi
 
     [[ -r /etc/os-release ]] || die "/etc/os-release is missing"
     # shellcheck disable=SC1091
@@ -205,8 +270,15 @@ preflight() {
 }
 
 acquire_lock() {
-    exec 9>"$LOCK_FILE"
-    flock -n 9 || die "another bootstrap process is running"
+    if [[ "$OS" == "Darwin" ]]; then
+        # shlock 自带 stale-lock 检测（锁内 PID 已死则抢锁成功）。
+        install -d -m 0755 "$STATE_DIR"
+        shlock -f "$LOCK_FILE" -p $$ \
+            || die "another bootstrap process is running"
+    else
+        exec 9>"$LOCK_FILE"
+        flock -n 9 || die "another bootstrap process is running"
+    fi
 }
 
 select_package() {
@@ -241,7 +313,7 @@ cleanup() {
         if [[ "$SERVICE_UPDATE_STARTED" -eq 1 ]]; then
             restore_previous_service
         elif [[ "$SERVICE_STARTED" -eq 1 ]]; then
-            systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+            service_stop
         fi
     fi
     if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
@@ -250,16 +322,16 @@ cleanup() {
 }
 
 snapshot_service() {
-    SERVICE_BACKUP_FILE="${TMP_DIR}/${SERVICE_NAME}.service.backup"
+    SERVICE_BACKUP_FILE="${TMP_DIR}/${SERVICE_NAME}.backup"
     if [[ -e "$SERVICE_FILE" ]]; then
-        cp -p -- "$SERVICE_FILE" "$SERVICE_BACKUP_FILE" \
+        cp -p "$SERVICE_FILE" "$SERVICE_BACKUP_FILE" \
             || die "could not back up the existing service unit"
         SERVICE_FILE_EXISTED=1
     fi
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
+    if service_is_active; then
         SERVICE_WAS_ACTIVE=1
     fi
-    if systemctl is-enabled --quiet "$SERVICE_NAME"; then
+    if service_is_enabled; then
         SERVICE_WAS_ENABLED=1
     fi
     SERVICE_SNAPSHOT_READY=1
@@ -268,12 +340,32 @@ snapshot_service() {
 restore_previous_service() {
     [[ "$SERVICE_SNAPSHOT_READY" -eq 1 ]] || return 0
 
+    if [[ "$OS" == "Darwin" ]]; then
+        launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+        if [[ "$SERVICE_FILE_EXISTED" -eq 1 ]]; then
+            cp -p "$SERVICE_BACKUP_FILE" "$SERVICE_FILE" \
+                || { warn "could not restore the previous service plist"; return 0; }
+        else
+            rm -f "$SERVICE_FILE" || true
+        fi
+        # 先 enable 再 bootstrap：disabled 的服务无法 bootstrap。
+        launchctl enable "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+        if [[ "$SERVICE_WAS_ACTIVE" -eq 1 && -e "$SERVICE_FILE" ]]; then
+            launchctl bootstrap system "$SERVICE_FILE" >/dev/null 2>&1 || \
+                warn "could not restart the previous service"
+        fi
+        if [[ "$SERVICE_WAS_ENABLED" -eq 0 ]]; then
+            launchctl disable "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     if [[ "$SERVICE_FILE_EXISTED" -eq 1 ]]; then
-        cp -p -- "$SERVICE_BACKUP_FILE" "$SERVICE_FILE" \
+        cp -p "$SERVICE_BACKUP_FILE" "$SERVICE_FILE" \
             || { warn "could not restore the previous service unit"; return 0; }
     else
-        rm -f -- "$SERVICE_FILE" || true
+        rm -f "$SERVICE_FILE" || true
     fi
     systemctl daemon-reload >/dev/null 2>&1 || true
     if [[ "$SERVICE_WAS_ENABLED" -eq 1 ]]; then
@@ -316,6 +408,41 @@ download_package() {
 }
 
 install_tailcat() {
+    if [[ "$OS" == "Darwin" ]]; then
+        # macOS 无官方二进制，走 Homebrew（README 记载的 macOS 安装方式）。
+        # brew 不能以 root 运行，必须切回 SUDO_USER。
+        local brew_bin="" candidate
+        for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [[ -x "$candidate" ]]; then
+                brew_bin="$candidate"
+                break
+            fi
+        done
+        if [[ -z "$brew_bin" ]]; then
+            brew_bin="$(sudo -H -u "$SERVICE_USER" sh -c 'command -v brew' 2>/dev/null || true)"
+        fi
+        [[ -n "$brew_bin" ]] \
+            || die "macOS requires Homebrew (https://brew.sh) to install tailcat"
+        # Xcode/CLT 许可证未同意时 brew 必然失败；幂等接受，CLT 未装则给出明确指引。
+        if ! xcode-select -p >/dev/null 2>&1; then
+            die "未检测到 Command Line Tools：请先运行 'xcode-select --install'（GUI 装完后）重试本安装"
+        fi
+        log "检查 Xcode/CLT 许可证"
+        xcodebuild -license accept >/dev/null 2>&1 \
+            || warn "未能自动接受 Xcode 许可证；若 brew 报 license 错误请手动执行: sudo xcodebuild -license accept"
+        TAILCAT_BIN="${brew_bin%/bin/brew}/bin/tailcat"
+        if [[ ! -x "$TAILCAT_BIN" ]]; then
+            log "installing tailcat via Homebrew"
+            sudo -H -u "$SERVICE_USER" "$brew_bin" install tailcat \
+                || die "brew install tailcat failed"
+        fi
+        [[ -x "$TAILCAT_BIN" ]] \
+            || die "tailcat not found at $TAILCAT_BIN after brew install"
+        "$TAILCAT_BIN" version >/dev/null 2>&1 || die "tailcat binary does not run"
+        log "tailcat $("$TAILCAT_BIN" version 2>/dev/null) installed at $TAILCAT_BIN"
+        return 0
+    fi
+
     local installed_version="" binary_version="" deb
 
     installed_version="$(dpkg-query --show --showformat='${Version}' tailcat 2>/dev/null || true)"
@@ -340,34 +467,61 @@ install_tailcat() {
 
 remove_legacy_support_user() {
     [[ -e "$MANAGED_USER_FILE" ]] || return 0
-    if getent passwd "$LEGACY_SUPPORT_USER" >/dev/null; then
-        userdel "$LEGACY_SUPPORT_USER" || die "could not remove $LEGACY_SUPPORT_USER"
+    if [[ "$OS" == "Darwin" ]]; then
+        dscl . -delete "/Users/$LEGACY_SUPPORT_USER" >/dev/null 2>&1 || true
+        dscl . -delete "/Groups/$LEGACY_SUPPORT_GROUP" >/dev/null 2>&1 || true
+    else
+        if getent passwd "$LEGACY_SUPPORT_USER" >/dev/null; then
+            userdel "$LEGACY_SUPPORT_USER" || die "could not remove $LEGACY_SUPPORT_USER"
+        fi
+        if getent group "$LEGACY_SUPPORT_GROUP" >/dev/null; then
+            groupdel "$LEGACY_SUPPORT_GROUP" || die "could not remove $LEGACY_SUPPORT_GROUP"
+        fi
     fi
-    if getent group "$LEGACY_SUPPORT_GROUP" >/dev/null; then
-        groupdel "$LEGACY_SUPPORT_GROUP" || die "could not remove $LEGACY_SUPPORT_GROUP"
-    fi
-    rm -f -- "$MANAGED_USER_FILE"
+    rm -f "$MANAGED_USER_FILE"
     rmdir "$LEGACY_SUPPORT_HOME" >/dev/null 2>&1 || true
 }
 
+# user_field <user> <key>：macOS 下从 dscacheutil 取 passwd 字段（dir/shell/uid）。
+user_field() {
+    dscacheutil -q user -a name "$1" | awk -v k="$2:" '$1 == k {sub(/^[^ ]* /, ""); print; exit}'
+}
+
 select_service_user() {
-    local passwd_entry uid
+    local uid
 
     SERVICE_USER="${SUDO_USER:-}"
     [[ -n "$SERVICE_USER" && "$SERVICE_USER" != "root" ]] \
         || die "run this installer from the intended login user with sudo, not from a root shell"
     [[ "$SERVICE_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] \
         || die "unsupported login user name: $SERVICE_USER"
-    passwd_entry="$(getent passwd "$SERVICE_USER")" \
-        || die "login user does not exist: $SERVICE_USER"
-    IFS=: read -r _ _ uid _ _ SERVICE_HOME SERVICE_SHELL <<<"$passwd_entry"
+
+    if [[ "$OS" == "Darwin" ]]; then
+        uid="$(user_field "$SERVICE_USER" uid)"
+        SERVICE_HOME="$(user_field "$SERVICE_USER" dir)"
+        SERVICE_SHELL="$(user_field "$SERVICE_USER" shell)"
+        [[ -n "$uid" && -n "$SERVICE_HOME" && -n "$SERVICE_SHELL" ]] \
+            || die "login user does not exist: $SERVICE_USER"
+    else
+        local passwd_entry
+        passwd_entry="$(getent passwd "$SERVICE_USER")" \
+            || die "login user does not exist: $SERVICE_USER"
+        IFS=: read -r _ _ uid _ _ SERVICE_HOME SERVICE_SHELL <<<"$passwd_entry"
+    fi
     [[ "$uid" =~ ^[0-9]+$ && "$uid" != "0" ]] \
         || die "service user must not have UID 0"
     [[ -d "$SERVICE_HOME" ]] || die "login user home does not exist: $SERVICE_HOME"
-    [[ "$SERVICE_HOME" == /* && "$SERVICE_HOME" != *['"'\\%]* ]] \
-        || die "login user home cannot be written safely to a systemd unit"
-    [[ "$SERVICE_SHELL" == /* && -x "$SERVICE_SHELL" && "$SERVICE_SHELL" != *['"'\\%]* ]] \
-        || die "login user has an unusable shell: $SERVICE_SHELL"
+    if [[ "$OS" == "Darwin" ]]; then
+        [[ "$SERVICE_HOME" == /* && "$SERVICE_HOME" != *[$'\n\r']* ]] \
+            || die "login user home cannot be written safely to a launchd plist"
+        [[ "$SERVICE_SHELL" == /* && -x "$SERVICE_SHELL" && "$SERVICE_SHELL" != *[$'\n\r']* ]] \
+            || die "login user has an unusable shell: $SERVICE_SHELL"
+    else
+        [[ "$SERVICE_HOME" == /* && "$SERVICE_HOME" != *['"'\\%]* ]] \
+            || die "login user home cannot be written safely to a systemd unit"
+        [[ "$SERVICE_SHELL" == /* && -x "$SERVICE_SHELL" && "$SERVICE_SHELL" != *['"'\\%]* ]] \
+            || die "login user has an unusable shell: $SERVICE_SHELL"
+    fi
     SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
     [[ "$SERVICE_GROUP" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] \
         || die "unsupported primary group name: $SERVICE_GROUP"
@@ -378,7 +532,7 @@ configure_allowed_clients() {
     if [[ -n "$ALLOWED_CLIENTS" ]]; then
         validate_allowed_clients "$ALLOWED_CLIENTS"
         printf '%s\n' "$ALLOWED_CLIENTS" >"$ALLOW_FILE"
-        chown root:root "$ALLOW_FILE"
+        chown "root:${ROOT_GROUP}" "$ALLOW_FILE"
         chmod 0600 "$ALLOW_FILE"
     elif [[ -s "$ALLOW_FILE" ]]; then
         ALLOWED_CLIENTS="$(<"$ALLOW_FILE")"
@@ -386,7 +540,7 @@ configure_allowed_clients() {
     else
         ALLOWED_CLIENTS="$DEFAULT_ALLOWED_CLIENTS"
         printf '%s\n' "$ALLOWED_CLIENTS" >"$ALLOW_FILE"
-        chown root:root "$ALLOW_FILE"
+        chown "root:${ROOT_GROUP}" "$ALLOW_FILE"
         chmod 0600 "$ALLOW_FILE"
         log "using bundled support client key"
     fi
@@ -436,7 +590,7 @@ prepare_identity() {
         [[ -z "$requested" ]] || die "omit relay options while migrating a legacy identity"
         log "migrating legacy server identity"
         printf 'legacy\n' >"$RELAY_FILE"
-        chown root:root "$RELAY_FILE"
+        chown "root:${ROOT_GROUP}" "$RELAY_FILE"
         chmod 0600 "$RELAY_FILE"
         install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 "$LEGACY_KEY_FILE" "$KEY_FILE"
         MIGRATED_LEGACY_KEY=1
@@ -479,10 +633,15 @@ prepare_identity() {
         else
             genkey_args+=("--region=${DERP_HOSTS}")
         fi
+        if [[ "$OS" == "Darwin" ]]; then
+            # brew 的 tailcat ≥0.5 默认在地址里嵌入 WireGuard PSK，
+            # 但 ≤0.5.0 的客户端无法解析；与 Linux 舰队（v0.4.0）保持一致关掉。
+            genkey_args+=(--psk=false)
+        fi
         TOKEN="$($TAILCAT_BIN "${genkey_args[@]}")"
         validate_token "$TOKEN"
         printf '%s\n' "$requested" >"$RELAY_FILE"
-        chown root:root "$RELAY_FILE"
+        chown "root:${ROOT_GROUP}" "$RELAY_FILE"
         chmod 0600 "$RELAY_FILE"
         install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 "$tmp_key" "$KEY_FILE"
     fi
@@ -491,7 +650,120 @@ prepare_identity() {
     chmod 0600 "$KEY_FILE"
 }
 
+# xml_escape <text>：转义写进 plist 的动态值。
+xml_escape() {
+    local s="$1"
+    s="${s//&/&amp;}"
+    s="${s//</&lt;}"
+    s="${s//>/&gt;}"
+    s="${s//\"/&quot;}"
+    s="${s//"'"/&apos;}"
+    printf '%s' "$s"
+}
+
+# macOS 没有 systemd RuntimeMaxSec；--duration-minutes 用包装脚本实现到点自杀。
+write_wrapper_macos() {
+    cat >"$WRAPPER_FILE" <<EOF
+#!/bin/sh
+# tailcat 限时支持窗口：${DURATION_MINUTES} 分钟后终止子进程并退出。
+"$TAILCAT_BIN" serve --key="$KEY_FILE" --verbose --allow="$ALLOWED_CLIENTS" no-auth-ssh &
+child=\$!
+( sleep $((DURATION_MINUTES * 60)); kill -TERM "\$child" 2>/dev/null ) &
+watchdog=\$!
+trap 'kill -TERM "\$child" "\$watchdog" 2>/dev/null' TERM INT
+wait "\$child"
+status=\$?
+kill "\$watchdog" 2>/dev/null
+exit "\$status"
+EOF
+    chmod 0755 "$WRAPPER_FILE"
+}
+
 write_service() {
+    if [[ "$OS" == "Darwin" ]]; then
+        SERVICE_UPDATE_STARTED=1
+        local program_args home shell allowed bindir
+        home="$(xml_escape "$SERVICE_HOME")"
+        shell="$(xml_escape "$SERVICE_SHELL")"
+        allowed="$(xml_escape "$ALLOWED_CLIENTS")"
+        bindir="$(xml_escape "${TAILCAT_BIN%/*}")"
+        if [[ "$DURATION_MINUTES" -gt 0 ]]; then
+            write_wrapper_macos
+            program_args="        <string>$(xml_escape "$WRAPPER_FILE")</string>"
+        else
+            program_args="        <string>$(xml_escape "$TAILCAT_BIN")</string>
+        <string>serve</string>
+        <string>--key=$(xml_escape "$KEY_FILE")</string>
+        <string>--verbose</string>
+        <string>--allow=${allowed}</string>
+        <string>no-auth-ssh</string>"
+        fi
+        cat >"$SERVICE_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${SERVICE_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>
+${program_args}
+    </array>
+    <key>UserName</key>
+    <string>$(xml_escape "$SERVICE_USER")</string>
+    <key>GroupName</key>
+    <string>$(xml_escape "$SERVICE_GROUP")</string>
+    <key>WorkingDirectory</key>
+    <string>${home}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${home}</string>
+        <key>SHELL</key>
+        <string>${shell}</string>
+        <key>PATH</key>
+        <string>${bindir}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>XDG_CONFIG_HOME</key>
+        <string>${RUNTIME_DIR}/config</string>
+        <key>XDG_CACHE_HOME</key>
+        <string>${RUNTIME_DIR}/cache</string>
+        <key>TAILCAT_ADDR_FILE</key>
+        <string>${RUNTIME_TOKEN}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+EOF
+        if [[ "$DURATION_MINUTES" -gt 0 ]]; then
+            # 限时窗口：不重启、不开机自启（bootstrap 后立即 disable）。
+            cat >>"$SERVICE_FILE" <<'EOF'
+    <key>KeepAlive</key>
+    <false/>
+EOF
+        else
+            # 常驻：等价 Restart=on-failure + RestartSec=3。
+            cat >>"$SERVICE_FILE" <<'EOF'
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
+EOF
+        fi
+        cat >>"$SERVICE_FILE" <<EOF
+    <key>StandardOutPath</key>
+    <string>${SERVICE_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${SERVICE_LOG}</string>
+</dict>
+</plist>
+EOF
+        chmod 0644 "$SERVICE_FILE"
+        plutil -lint "$SERVICE_FILE" >/dev/null || die "generated launchd plist is invalid"
+        return 0
+    fi
+
     SERVICE_UPDATE_STARTED=1
     cat >"$SERVICE_FILE" <<EOF
 [Unit]
@@ -542,12 +814,91 @@ EOF
 }
 
 service_failure() {
-    journalctl --unit "$SERVICE_NAME" --lines 30 --no-pager >&2 || true
+    if [[ "$OS" == "Darwin" ]]; then
+        tail -n 30 "$SERVICE_LOG" >&2 2>/dev/null || true
+        launchctl print "system/${SERVICE_NAME}" 2>/dev/null |
+            grep -E 'state|last exit|program|spawn|stderr|stdout' >&2 2>/dev/null || true
+    else
+        journalctl --unit "$SERVICE_NAME" --lines 30 --no-pager >&2 || true
+    fi
     die "$1"
 }
 
 start_support_window() {
     local active_token="" attempt
+
+    if [[ "$OS" == "Darwin" ]]; then
+        launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+        # disabled 的服务无法 bootstrap；先清掉旧的 disable 覆盖。
+        launchctl enable "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+        rm -f "$RUNTIME_TOKEN"
+        SERVICE_STARTED=1
+        launchctl bootstrap system "$SERVICE_FILE" \
+            || die "could not bootstrap ${SERVICE_NAME}"
+
+        FALLBACK_PID=""
+        for ((attempt = 0; attempt < 60; attempt++)); do
+            if [[ -s "$RUNTIME_TOKEN" ]]; then
+                active_token="$(<"$RUNTIME_TOKEN")"
+                break
+            fi
+            if ! service_is_active; then
+                launchctl print "system/${SERVICE_NAME}" 2>/dev/null |
+                    grep -E 'state|last exit|program|spawn' >&2 2>/dev/null || true
+                log "launchd failed to keep the service alive; falling back to a plain background process as ${SERVICE_USER}"
+                nohup sudo -H -u "$SERVICE_USER" env \
+                    HOME="$SERVICE_HOME" SHELL="$SERVICE_SHELL" \
+                    XDG_CONFIG_HOME="$RUNTIME_DIR/config" \
+                    XDG_CACHE_HOME="$RUNTIME_DIR/cache" \
+                    TAILCAT_ADDR_FILE="$RUNTIME_TOKEN" \
+                    "$TAILCAT_BIN" serve --key="$KEY_FILE" --verbose \
+                    --allow="$ALLOWED_CLIENTS" no-auth-ssh \
+                    >>"$SERVICE_LOG" 2>&1 &
+                FALLBACK_PID=$!
+                for ((attempt = 0; attempt < 60; attempt++)); do
+                    [[ -s "$RUNTIME_TOKEN" ]] && break
+                    kill -0 "$FALLBACK_PID" 2>/dev/null \
+                        || service_failure "fallback serve exited before publishing its token"
+                    sleep 0.5
+                done
+                [[ -s "$RUNTIME_TOKEN" ]] \
+                    || service_failure "fallback serve did not publish its token within 30 seconds"
+                active_token="$(<"$RUNTIME_TOKEN")"
+                break
+            fi
+            sleep 0.5
+        done
+        [[ -n "$active_token" ]] || service_failure "service did not publish its token within 30 seconds"
+        if [[ -n "$FALLBACK_PID" ]]; then
+            kill -0 "$FALLBACK_PID" 2>/dev/null \
+                || service_failure "fallback serve exited after publishing its token"
+        else
+            service_is_active || service_failure "service exited after publishing its token"
+        fi
+        validate_token "$active_token"
+
+        if [[ "$DURATION_MINUTES" -gt 0 ]]; then
+            # 限时窗口不得开机自启。
+            launchctl disable "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+            if service_is_enabled; then
+                service_failure "service must not be enabled at boot"
+            fi
+        fi
+
+        if [[ -n "$TOKEN" && "$TOKEN" != "$active_token" ]]; then
+            launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+            die "persisted token does not match the server private key; refusing silent identity replacement"
+        fi
+        TOKEN="$active_token"
+        printf '%s\n' "$TOKEN" >"$TOKEN_FILE"
+        chown "root:${ROOT_GROUP}" "$TOKEN_FILE"
+        chmod 0600 "$TOKEN_FILE"
+
+        if [[ "$MIGRATED_LEGACY_KEY" -eq 1 ]]; then
+            rm -f "$LEGACY_KEY_FILE"
+        fi
+        return 0
+    fi
 
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -580,11 +931,11 @@ start_support_window() {
     fi
     TOKEN="$active_token"
     printf '%s\n' "$TOKEN" >"$TOKEN_FILE"
-    chown root:root "$TOKEN_FILE"
+    chown "root:${ROOT_GROUP}" "$TOKEN_FILE"
     chmod 0600 "$TOKEN_FILE"
 
     if [[ "$MIGRATED_LEGACY_KEY" -eq 1 ]]; then
-        rm -f -- "$LEGACY_KEY_FILE"
+        rm -f "$LEGACY_KEY_FILE"
     fi
     if [[ "$DURATION_MINUTES" -gt 0 ]] \
         && [[ "$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)" == "enabled" ]]; then
@@ -594,12 +945,22 @@ start_support_window() {
 }
 
 uninstall_service() {
+    if [[ "$OS" == "Darwin" ]]; then
+        launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+        rm -f "$SERVICE_FILE" "$LEGACY_KEY_FILE"
+        remove_legacy_support_user
+        rm -rf "$STATE_DIR"
+        log "removed the service, device identity, and token; the login user was not changed"
+        log "the tailcat package remains installed; remove it with: brew uninstall tailcat"
+        return 0
+    fi
+
     systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
-    rm -f -- "$SERVICE_FILE" "$LEGACY_KEY_FILE"
+    rm -f "$SERVICE_FILE" "$LEGACY_KEY_FILE"
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
     remove_legacy_support_user
-    rm -rf -- "$STATE_DIR"
+    rm -rf "$STATE_DIR"
     log "removed the service, device identity, and token; the login user was not changed"
     log "the tailcat package remains installed; remove it with: dpkg --remove tailcat"
 }
@@ -614,14 +975,21 @@ main() {
         return
     fi
 
-    select_package "$(dpkg --print-architecture)" "$(uname -m)"
+    if [[ "$OS" == "Linux" ]]; then
+        select_package "$(dpkg --print-architecture)" "$(uname -m)"
+    fi
     select_service_user
     TMP_DIR="$(mktemp -d -t tailcat-bootstrap.XXXXXXXX)"
     trap cleanup EXIT
 
     install_tailcat
-    install -d -o root -g root -m 0755 "$STATE_DIR"
+    install -d -o root -g "$ROOT_GROUP" -m 0755 "$STATE_DIR"
     install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$WORK_DIR"
+    if [[ "$OS" == "Darwin" ]]; then
+        # 等价 systemd RuntimeDirectory：服务用户的运行时目录（token/XDG/日志）。
+        install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
+            "$RUNTIME_DIR" "${RUNTIME_DIR}/config" "${RUNTIME_DIR}/cache"
+    fi
     configure_allowed_clients
     load_saved_relay
     [[ -z "$DERP_HOSTS" ]] || probe_derp_hosts
@@ -632,18 +1000,32 @@ main() {
     remove_legacy_support_user
     INSTALL_COMPLETE=1
 
-    log "tailcat bootstrap ${INSTALLER_VERSION} installed tailcat v${TAILCAT_VERSION}"
+    local installed_desc="v${TAILCAT_VERSION}"
+    if [[ "$OS" == "Darwin" ]]; then
+        installed_desc="$("$TAILCAT_BIN" version 2>/dev/null || printf 'unknown')"
+    fi
+    log "tailcat bootstrap ${INSTALLER_VERSION} installed tailcat ${installed_desc}"
     log "remote session user: ${SERVICE_USER}; existing sudo policy is unchanged"
     if [[ "$DURATION_MINUTES" -gt 0 ]]; then
         log "support window: active for ${DURATION_MINUTES} minutes; disabled at boot"
     else
         log "persistent service: enabled at boot, restarts on failure"
     fi
+    if [[ -n "$FALLBACK_PID" ]]; then
+        log "note: launchd fallback mode; the service is a plain background process and will NOT survive a reboot"
+    fi
     printf '\nDevice token:\n%s\n\n' "$TOKEN"
     printf 'Verify remotely: tailcat --key=<device-key> ping %s\n' "$TOKEN"
-    printf 'Stop now:       sudo systemctl stop %s\n' "$SERVICE_NAME"
-    printf 'Open again:     sudo systemctl start %s\n' "$SERVICE_NAME"
-    printf 'Connection log: sudo journalctl -u %s\n' "$SERVICE_NAME"
+    if [[ "$OS" == "Darwin" ]]; then
+        printf 'Stop now:       sudo launchctl bootout system/%s\n' "$SERVICE_NAME"
+        printf 'Open again:     sudo launchctl enable system/%s; sudo launchctl bootstrap system %s\n' \
+            "$SERVICE_NAME" "$SERVICE_FILE"
+        printf 'Connection log: sudo tail -f %s\n' "$SERVICE_LOG"
+    else
+        printf 'Stop now:       sudo systemctl stop %s\n' "$SERVICE_NAME"
+        printf 'Open again:     sudo systemctl start %s\n' "$SERVICE_NAME"
+        printf 'Connection log: sudo journalctl -u %s\n' "$SERVICE_NAME"
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
