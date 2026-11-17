@@ -109,6 +109,9 @@ pick_derp() {
 main() {
     local -a args=()
     local explicit_relay=0 no_auto=0 skip_probe=0
+    # 历史语义：funnel 面向无屏设备，默认常驻；用户显式给 --duration-minutes
+    # 或 --persistent 时不干预（bootstrap 新默认是 48h 临时窗口）。
+    local passthrough=" $* "
 
     while (($# > 0)); do
         case "$1" in
@@ -124,6 +127,11 @@ main() {
             *) args+=("$1"); shift ;;
         esac
     done
+
+    case "$passthrough" in
+        *" --duration-minutes"*|*" --duration-minutes="*|*" --persistent"*) : ;;
+        *) args+=("--persistent") ;;
+    esac
 
     [[ "${EUID}" -eq 0 ]] || die "需要 root 运行：curl -fsSL <url>/install.sh | sudo bash"
     command -v curl >/dev/null || die "required command not found: curl"

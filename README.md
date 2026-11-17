@@ -10,7 +10,7 @@
 curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh | sudo bash
 ```
 
-默认开机自启、故障自动重启，安装完成后显示设备 token。远程终端使用执行 `sudo` 的用户，沿用其现有权限。
+默认开启 **48 小时临时支持窗口**（到期自动停止、不随开机启动），安装完成后显示设备 token。远程终端使用执行 `sudo` 的用户，沿用其现有权限。需要常驻（开机自启、故障自动重启）时加 `--persistent`。
 
 默认使用内置售后公钥和公共中继 `derp1d.tailscale.com`，无需 Tailscale 账号或开放公网入站端口。公共中继不保证可用性，可通过 `--derp` 指定自建中继。
 
@@ -41,13 +41,14 @@ curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailc
 sudo bash bootstrap-tailcat.sh --duration-minutes=120
 ```
 
-临时窗口支持 5–1440 分钟，到期停止，不随开机启动；每次启动服务重新计时。再次不带参数运行安装器可恢复常驻模式。
+临时窗口支持 5–2880 分钟（含 48 小时），到期停止，不随开机启动；每次启动服务重新计时。`--persistent` 恢复常驻模式（开机自启、故障自动重启）。
 
 覆盖售后公钥或中继：
 
 ```bash
 sudo bash bootstrap-tailcat.sh --allow='nodekey:...'
 sudo bash bootstrap-tailcat.sh --derp='derp.example.com'
+sudo bash bootstrap-tailcat.sh --persistent
 ```
 
 重复运行会保留设备身份和 token，以及未指定的公钥和中继配置。`--allow` 替换整个公钥列表；已有设备更换中继需要卸载重装，生成新 token。更多参数见 `--help`。

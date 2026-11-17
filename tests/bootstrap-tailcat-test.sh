@@ -56,10 +56,17 @@ expect_failure select_package i386 i686
 
 (parse_args --allow "$VALID_KEY" --derp derp.example.com --duration-minutes 5)
 (parse_args --allow "$VALID_KEY" --public-derp --duration-minutes 1440)
+(parse_args --allow "$VALID_KEY" --public-derp --duration-minutes 2880)
 expect_failure parse_args --allow "$VALID_KEY" --derp derp.example.com --public-derp
 expect_failure parse_args --duration-minutes 4
-expect_failure parse_args --duration-minutes 1441
+expect_failure parse_args --duration-minutes 2881
 expect_failure parse_args --duration-minutes 0
+# 默认（无参）= 48 小时临时窗口；--persistent = 常驻；二者互斥。
+parse_args
+assert_equal "$DURATION_MINUTES" "2880"
+parse_args --persistent
+assert_equal "$DURATION_MINUTES" "0"
+expect_failure parse_args --persistent --duration-minutes 30
 duration_test_dir="$(mktemp -d)"
 duration_marker="${duration_test_dir}/marker"
 cleanup_duration_test() { rm -rf -- "$duration_test_dir"; }

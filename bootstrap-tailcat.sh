@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 umask 077
-readonly INSTALLER_VERSION="1.2.4"
+readonly INSTALLER_VERSION="1.3.0"
 readonly TAILCAT_VERSION="0.4.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly DEFAULT_ALLOWED_CLIENTS="nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
@@ -64,6 +64,7 @@ DERP_HOSTS=""
 USE_PUBLIC_DERP=0
 DURATION_MINUTES=0
 DURATION_SET=0
+PERSISTENT_SET=0
 SERVICE_USER=""
 SERVICE_GROUP=""
 SERVICE_HOME=""
@@ -124,25 +125,29 @@ Usage: sudo bash bootstrap-tailcat.sh [--allow KEY[,KEY...]] [--derp HOST[,HOST.
 Mode: install (default) | --uninstall
 
 Install modes:
-  Default (recommended): persistent service. Enabled at boot, always
-  running, and survives machine restarts with a stable token.
-  --duration-minutes N: instead run a temporary support window that
-  auto-stops after N minutes (5-1440) and stays disabled at boot.
+  Default (recommended): a 48-hour temporary support window. It
+  auto-stops after 48 hours, stays disabled at boot, and keeps a
+  stable token across re-runs.
+  --persistent: instead run the always-on service: enabled at boot,
+  restarts on failure, stable token across reboots.
+  --duration-minutes N: temporary support window of N minutes
+  (5-2880), auto-stops, stays disabled at boot.
 
 Options:
   --allow KEYS       Allowed tailcat client public keys. A bundled key is used by default.
                      Re-run with a new list to revoke or rotate support clients.
   --derp HOSTS       DERP hostname(s), comma-separated. A bundled host is used by default.
   --public-derp      Explicitly use Tailcat's best-effort public relay service.
+  --persistent       Run the always-on service (enabled at boot, restarts on
+                     failure) instead of the default 48-hour temporary window.
   --duration-minutes N
-                     Temporary support window in minutes, 5-1440.
-                     Omit for a persistent service (default).
+                     Temporary support window in minutes, 5-2880.
   --uninstall        Remove the service, device identity, and token.
   -h, --help         Show this help.
 
-In the default persistent mode the service runs as the user who invoked
-sudo, inherits that user's existing sudo policy, and restarts
-automatically after failures or reboots.
+The service runs as the user who invoked sudo and inherits that user's
+existing sudo policy; in --persistent mode it also restarts automatically
+after failures or reboots.
 
 Platforms:
   Linux (Debian/Ubuntu): tailcat .deb package, systemd service.
@@ -164,6 +169,7 @@ parse_args() {
                 DERP_HOSTS="$2"; shift 2
                 ;;
             --public-derp) USE_PUBLIC_DERP=1; shift ;;
+            --persistent) PERSISTENT_SET=1; shift ;;
             --duration-minutes=*) DURATION_MINUTES="${1#*=}"; DURATION_SET=1; shift ;;
             --duration-minutes)
                 (($# >= 2)) || die "--duration-minutes requires a value"
@@ -181,12 +187,20 @@ parse_args() {
         return 0
     fi
 
+    if ((PERSISTENT_SET && DURATION_SET)); then
+        die "--persistent cannot be combined with --duration-minutes"
+    fi
     if ((DURATION_SET)); then
         [[ "$DURATION_MINUTES" =~ ^[0-9]+$ ]] || die "duration must be an integer"
-        ((${#DURATION_MINUTES} <= 4)) || die "duration must be between 5 and 1440 minutes"
-        ((10#$DURATION_MINUTES >= 5 && 10#$DURATION_MINUTES <= 1440)) \
-            || die "duration must be between 5 and 1440 minutes"
+        ((${#DURATION_MINUTES} <= 4)) || die "duration must be between 5 and 2880 minutes"
+        ((10#$DURATION_MINUTES >= 5 && 10#$DURATION_MINUTES <= 2880)) \
+            || die "duration must be between 5 and 2880 minutes"
         DURATION_MINUTES=$((10#$DURATION_MINUTES))
+    elif ((PERSISTENT_SET)); then
+        DURATION_MINUTES=0
+    else
+        # Default: a 48-hour temporary support window (auto-stops, disabled at boot).
+        DURATION_MINUTES=2880
     fi
     [[ -z "$DERP_HOSTS" || "$USE_PUBLIC_DERP" -eq 0 ]] \
         || die "use either --derp or --public-derp, not both"
