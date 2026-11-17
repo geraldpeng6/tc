@@ -36,7 +36,7 @@ jobs:
           sudo systemctl is-active --quiet tailcat-ssh
           sudo systemd-analyze verify /etc/systemd/system/tailcat-ssh.service
           test "$(systemctl show tailcat-ssh --property=Restart --value)" = no
-          sudo grep --fixed-strings --quiet '^RuntimeMaxSec=2880min$' /etc/systemd/system/tailcat-ssh.service
+          sudo grep --fixed-strings --quiet 'RuntimeMaxSec=2880min' /etc/systemd/system/tailcat-ssh.service
           test "$(systemctl show tailcat-ssh --property=NoNewPrivileges --value)" = no
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/server.private.json)" = "$(id -un):$(id -gn):600"
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/token)" = root:root:600
