@@ -303,7 +303,7 @@ def render(text, quiet=4):
     m, _, _ = qr_matrix(text)
     n = len(m)
     g = [[False] * (n + 2 * quiet) for _ in range(quiet)] + \
-        [row[:] + [False] * 2 * quiet for row in m] + \
+        [[False] * quiet + row[:] + [False] * quiet for row in m] + \
         [[False] * (n + 2 * quiet) for _ in range(quiet)]
     lines = []
     for r in range(0, len(g), 2):
