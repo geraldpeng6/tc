@@ -42,11 +42,25 @@
 构建脚本从 tailscale 官方 release 下载对应架构的 tailcat deb 并按
 `BUNDLE_SHA256`（与 `bootstrap-tailcat.sh` 内固定值一致）校验后捆绑。
 
+## 发布
+
+推送 `desktop-v<版本>` tag（如 `desktop-v2.3.1`）后，`.github/workflows/release.yml`
+构建三个架构的 deb 并发布到 GitHub Release，同时附带：
+
+- 不带版本号的副本 `tailcat-desktop_<amd64|arm64|armhf>.deb`，供固定装机命令使用；
+- 同版本的命令行引导脚本 `bootstrap-tailcat.sh`；
+- `SHA256SUMS`。
+
+发版前先把 `build.sh` 的 `DEFAULT_VERSION` 改成同一版本号。
+
 ## 安装
 
 ```bash
-sudo dpkg -i tailcat-desktop_<版本>_<架构>.deb
+curl -fLO https://github.com/geraldpeng6/tc/releases/latest/download/tailcat-desktop_$(dpkg --print-architecture).deb
+sudo apt install ./tailcat-desktop_$(dpkg --print-architecture).deb
 ```
+
+固定版本：把 `latest/download` 换成 `download/desktop-v<版本>`。
 
 安装即把入口装进应用列表（应用列表入口无需任何信任确认），并复制到
 每个真实用户的桌面目录（`xdg-user-dir DESKTOP`，含中文 locale 的

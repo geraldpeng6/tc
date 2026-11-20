@@ -6,9 +6,20 @@
 
 在需要远程接入的现有用户下执行：
 
+桌面版（推荐，应用列表/桌面出现「请求技术支持」入口，tailcat 离线捆绑）：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh | sudo bash
+curl -fLO https://github.com/geraldpeng6/tc/releases/latest/download/tailcat-desktop_$(dpkg --print-architecture).deb
+sudo apt install ./tailcat-desktop_$(dpkg --print-architecture).deb
 ```
+
+命令行版（无桌面或只需开启远程入口）：
+
+```bash
+curl -fsSL https://github.com/geraldpeng6/tc/releases/latest/download/bootstrap-tailcat.sh | sudo bash
+```
+
+安装包均来自 [GitHub Release](https://github.com/geraldpeng6/tc/releases)，`latest` 指向最新发布版本；需要固定版本时把 `latest/download` 换成 `download/desktop-v<版本>`。每个版本附带 `SHA256SUMS`，可下载后用 `sha256sum --check --ignore-missing SHA256SUMS` 校验。
 
 默认开启 **48 小时临时支持窗口**（到期自动停止、不随开机启动），安装完成后显示设备 token。远程终端使用执行 `sudo` 的用户，沿用其现有权限。需要常驻（开机自启、故障自动重启）时加 `--persistent`。
 
@@ -37,7 +48,7 @@ sudo journalctl -u tailcat-ssh     # 查看连接日志
 需要传入参数时，先下载脚本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh -o bootstrap-tailcat.sh
+curl -fsSLO https://github.com/geraldpeng6/tc/releases/latest/download/bootstrap-tailcat.sh
 sudo bash bootstrap-tailcat.sh --duration-minutes=120
 ```
 
@@ -56,7 +67,7 @@ sudo bash bootstrap-tailcat.sh --persistent
 ## 卸载
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/geraldpeng6/tc/main/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
+curl -fsSL https://github.com/geraldpeng6/tc/releases/latest/download/bootstrap-tailcat.sh | sudo bash -s -- --uninstall
 ```
 
 删除服务、设备私钥和 token。Tailcat 软件包保留，如需移除：
