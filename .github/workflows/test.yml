@@ -41,6 +41,9 @@ jobs:
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/server.private.json)" = "$(id -un):$(id -gn):600"
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/token)" = root:root:600
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/work)" = "$(id -un):$(id -gn):700"
+          # SSH 主机密钥所在的配置目录必须持久，重开窗口时主机密钥才不会变
+          test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/config)" = "$(id -un):$(id -gn):700"
+          sudo grep --fixed-strings --quiet 'XDG_CONFIG_HOME=/var/lib/tailcat/config' /etc/systemd/system/tailcat-ssh.service
           test "$(sudo cat /var/lib/tailcat/allowed-clients)" = "nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
           test "$(sudo cat /var/lib/tailcat/relay)" = "custom:derp1d.tailscale.com"
           ! getent passwd tailcat-support

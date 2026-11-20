@@ -2,8 +2,8 @@
 
 set -Eeuo pipefail
 umask 077
-readonly INSTALLER_VERSION="1.3.0"
-readonly TAILCAT_VERSION="0.4.0"
+readonly INSTALLER_VERSION="1.4.0"
+readonly TAILCAT_VERSION="0.7.0"
 readonly DOWNLOAD_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 readonly DEFAULT_ALLOWED_CLIENTS="nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
 readonly DEFAULT_DERP_HOSTS="derp1d.tailscale.com"
@@ -32,6 +32,9 @@ case "$OS" in
         readonly SERVICE_NAME="tailcat-ssh"
         readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
         readonly RUNTIME_TOKEN="/run/tailcat-support/token"
+        # SSH 主机密钥等配置必须持久（RuntimeDirectory 会随服务停止被清空），
+        # 否则每次重开支持窗口都换主机密钥，客户端会报主机密钥变更。
+        readonly CONFIG_DIR="${STATE_DIR}/config"
         readonly LOCK_FILE="/run/tailcat-bootstrap.lock"
         readonly ROOT_GROUP="root"
         ;;
@@ -308,12 +311,12 @@ select_package() {
         amd64)
             ASSET_NAME="tailcat_${TAILCAT_VERSION}_linux_amd64.deb"
             PACKAGE_ARCH="amd64"
-            EXPECTED_SHA256="38ff4b45fe56b32c75738c10dfed4f0b68d33bee49a19695f4bb9f9ec5d6e3c0"
+            EXPECTED_SHA256="a8ad05230255186d9e8444ab8d7ebc8e7cca19283701404b49785531bf3c2af4"
             ;;
         arm64)
             ASSET_NAME="tailcat_${TAILCAT_VERSION}_linux_arm64.deb"
             PACKAGE_ARCH="arm64"
-            EXPECTED_SHA256="8f1835a3522ecfc855c9f4ece51c2266781fd03ce76da48036b08c4b86193899"
+            EXPECTED_SHA256="14e04174e8a6b27f9d5d0eccc3f986772456f2b2526c7bf8c1b71deec25cec7f"
             ;;
         armhf)
             [[ "$machine" != "armv6l" ]] || die "armv6 is not supported by Tailcat's GOARM=7 build"
@@ -321,7 +324,7 @@ select_package() {
                 || die "unsupported armhf CPU: $machine"
             ASSET_NAME="tailcat_${TAILCAT_VERSION}_linux_armv7.deb"
             PACKAGE_ARCH="armhf"
-            EXPECTED_SHA256="e98c18862ee1c72ad85db6653b64fdda4fbf6d14980b96f4ada63e09e2456187"
+            EXPECTED_SHA256="da6af712c448329edabe03fc6044cb6620f2b94cc3d3a1a5b25ea642fc20dce9"
             ;;
         *) die "unsupported Debian architecture: $architecture" ;;
     esac
@@ -797,7 +800,7 @@ Group=${SERVICE_GROUP}
 WorkingDirectory=${SERVICE_HOME}
 Environment="HOME=${SERVICE_HOME}"
 Environment="SHELL=${SERVICE_SHELL}"
-Environment=XDG_CONFIG_HOME=/run/tailcat-support/config
+Environment=XDG_CONFIG_HOME=${CONFIG_DIR}
 Environment=XDG_CACHE_HOME=/run/tailcat-support/cache
 Environment=TAILCAT_ADDR_FILE=${RUNTIME_TOKEN}
 ExecStart=${TAILCAT_BIN} serve --key=${KEY_FILE} --verbose --allow=${ALLOWED_CLIENTS} no-auth-ssh
@@ -1004,6 +1007,9 @@ main() {
     install_tailcat
     install -d -o root -g "$ROOT_GROUP" -m 0755 "$STATE_DIR"
     install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$WORK_DIR"
+    if [[ "$OS" == "Linux" ]]; then
+        install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$CONFIG_DIR"
+    fi
     if [[ "$OS" == "Darwin" ]]; then
         # 等价 systemd RuntimeDirectory：服务用户的运行时目录（token/XDG/日志）。
         install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \

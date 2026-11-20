@@ -9,20 +9,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-readonly TAILCAT_VERSION="0.4.0"
-readonly DEFAULT_VERSION="2.2.2"
+readonly TAILCAT_VERSION="0.7.0"
+readonly DEFAULT_VERSION="2.3.1"
 readonly RELEASE_BASE="https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}"
 
 readonly -A ASSET=(
-    [amd64]="tailcat_0.4.0_linux_amd64.deb"
-    [arm64]="tailcat_0.4.0_linux_arm64.deb"
-    [armv7]="tailcat_0.4.0_linux_armv7.deb"
+    [amd64]="tailcat_0.7.0_linux_amd64.deb"
+    [arm64]="tailcat_0.7.0_linux_arm64.deb"
+    [armv7]="tailcat_0.7.0_linux_armv7.deb"
 )
 # 与 bootstrap-tailcat.sh 内固定的 EXPECTED_SHA256 保持一致
 readonly -A BUNDLE_SHA256=(
-    [amd64]="38ff4b45fe56b32c75738c10dfed4f0b68d33bee49a19695f4bb9f9ec5d6e3c0"
-    [arm64]="8f1835a3522ecfc855c9f4ece51c2266781fd03ce76da48036b08c4b86193899"
-    [armv7]="e98c18862ee1c72ad85db6653b64fdda4fbf6d14980b96f4ada63e09e2456187"
+    [amd64]="a8ad05230255186d9e8444ab8d7ebc8e7cca19283701404b49785531bf3c2af4"
+    [arm64]="14e04174e8a6b27f9d5d0eccc3f986772456f2b2526c7bf8c1b71deec25cec7f"
+    [armv7]="da6af712c448329edabe03fc6044cb6620f2b94cc3d3a1a5b25ea642fc20dce9"
 )
 readonly -A DPKG_ARCH=([amd64]=amd64 [arm64]=arm64 [armv7]=armhf)
 

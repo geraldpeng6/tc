@@ -3,7 +3,7 @@
 # 确保捆绑的离线 deb 就位后，执行官方引导脚本完成服务配置。
 set -euo pipefail
 
-readonly TAILCAT_VERSION="0.4.0"
+readonly TAILCAT_VERSION="0.7.0"
 readonly BUNDLE_DIR="/usr/local/share/tailcat"
 readonly BOOTSTRAP="/usr/local/bin/bootstrap-tailcat"
 
