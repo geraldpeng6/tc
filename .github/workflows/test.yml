@@ -80,6 +80,9 @@ jobs:
       - name: Upgrade a v1.0.0 installation
         run: |
           sudo ./bootstrap-tailcat.sh --uninstall
+          # v1.0.0 固定旧版 tailcat，且会拒绝降级：先移除新版包，
+          # 这样后面一步同时覆盖 tailcat 包本身的升级。
+          sudo dpkg --remove tailcat
           curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
             https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.0.0/bootstrap-tailcat.sh \
             -o /tmp/bootstrap-v1.0.0.sh
