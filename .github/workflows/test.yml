@@ -41,6 +41,9 @@ jobs:
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/server.private.json)" = "$(id -un):$(id -gn):600"
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/token)" = root:root:600
           test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/work)" = "$(id -un):$(id -gn):700"
+          # SSH 主机密钥所在的配置目录必须持久，重开窗口时主机密钥才不会变
+          test "$(sudo stat --format='%U:%G:%a' /var/lib/tailcat/config)" = "$(id -un):$(id -gn):700"
+          sudo grep --fixed-strings --quiet 'XDG_CONFIG_HOME=/var/lib/tailcat/config' /etc/systemd/system/tailcat-ssh.service
           test "$(sudo cat /var/lib/tailcat/allowed-clients)" = "nodekey:6381fe8fa9c2b67c7d25ded51bde5e39d8c29b55dcd9411a44ba1525ac2f543f"
           test "$(sudo cat /var/lib/tailcat/relay)" = "custom:derp1d.tailscale.com"
           ! getent passwd tailcat-support
@@ -77,6 +80,9 @@ jobs:
       - name: Upgrade a v1.0.0 installation
         run: |
           sudo ./bootstrap-tailcat.sh --uninstall
+          # v1.0.0 固定旧版 tailcat，且会拒绝降级：先移除新版包，
+          # 这样后面一步同时覆盖 tailcat 包本身的升级。
+          sudo dpkg --remove tailcat
           curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
             https://raw.githubusercontent.com/geraldpeng6/tc/bootstrap-v1.0.0/bootstrap-tailcat.sh \
             -o /tmp/bootstrap-v1.0.0.sh

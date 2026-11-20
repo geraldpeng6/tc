@@ -53,11 +53,29 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: desktop-package-*
           path: dist
           merge-multiple: true
+
+      - name: Add stable-name assets and checksums
+        # 装机命令固定走 releases/latest/download/<不带版本号的文件名>，
+        # 命令行引导脚本也随版本发布，不再从 main 分支直接取。
+        run: |
+          shopt -s nullglob
+          debs=(dist/tailcat-desktop_*_*.deb)
+          test "${#debs[@]}" -eq 3
+          for deb in "${debs[@]}"; do
+            arch="${deb##*_}"; arch="${arch%.deb}"
+            cp "$deb" "dist/tailcat-desktop_${arch}.deb"
+          done
+          install -m 0755 bootstrap-tailcat.sh dist/bootstrap-tailcat.sh
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
       - name: Create GitHub release
         env:
@@ -66,9 +84,9 @@ jobs:
         run: |
           test -n "$(find dist -maxdepth 1 -name '*.deb' -print -quit)"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/*.deb --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$RELEASE_TAG" dist/*.deb \
+            gh release create "$RELEASE_TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "$RELEASE_TAG" \
               --generate-notes \

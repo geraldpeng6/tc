@@ -38,19 +38,19 @@ expect_failure validate_derp_hosts "derp.example.com,"
 expect_failure validate_derp_hosts "derp.example.com,,other.example.com"
 
 select_package amd64 x86_64
-assert_equal "$ASSET_NAME" "tailcat_0.4.0_linux_amd64.deb"
+assert_equal "$ASSET_NAME" "tailcat_0.7.0_linux_amd64.deb"
 assert_equal "$PACKAGE_ARCH" "amd64"
-assert_equal "$EXPECTED_SHA256" "38ff4b45fe56b32c75738c10dfed4f0b68d33bee49a19695f4bb9f9ec5d6e3c0"
+assert_equal "$EXPECTED_SHA256" "a8ad05230255186d9e8444ab8d7ebc8e7cca19283701404b49785531bf3c2af4"
 
 select_package arm64 aarch64
-assert_equal "$ASSET_NAME" "tailcat_0.4.0_linux_arm64.deb"
+assert_equal "$ASSET_NAME" "tailcat_0.7.0_linux_arm64.deb"
 assert_equal "$PACKAGE_ARCH" "arm64"
-assert_equal "$EXPECTED_SHA256" "8f1835a3522ecfc855c9f4ece51c2266781fd03ce76da48036b08c4b86193899"
+assert_equal "$EXPECTED_SHA256" "14e04174e8a6b27f9d5d0eccc3f986772456f2b2526c7bf8c1b71deec25cec7f"
 
 select_package armhf armv7l
-assert_equal "$ASSET_NAME" "tailcat_0.4.0_linux_armv7.deb"
+assert_equal "$ASSET_NAME" "tailcat_0.7.0_linux_armv7.deb"
 assert_equal "$PACKAGE_ARCH" "armhf"
-assert_equal "$EXPECTED_SHA256" "e98c18862ee1c72ad85db6653b64fdda4fbf6d14980b96f4ada63e09e2456187"
+assert_equal "$EXPECTED_SHA256" "da6af712c448329edabe03fc6044cb6620f2b94cc3d3a1a5b25ea642fc20dce9"
 expect_failure select_package armhf armv6l
 expect_failure select_package i386 i686
 
